@@ -671,7 +671,7 @@ def test_check_nvlink_connectivity__returns_fully_connected_when_nvidia_all_nvli
     monkeypatch, nvidia_smi_nvlink_output_dual_gpu_no_numa
 ):
     mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
-    mock_device_properties.name = "NVIDIA GeForce RTX 4090"
+    mock_device_properties.name = "NVIDIA RTX A6000"
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
 
@@ -707,7 +707,7 @@ def test_check_nvlink_connectivity_returns_fully_connected_when_amd_all_xgmi_8_g
     monkeypatch, rocm_smi_xgmi_output_multi_gpu
 ):
     mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
-    mock_device_properties.name = "amd instinct mi250x"  # ROCM 6.0.3
+    mock_device_properties.name = "AMD INSTINCT MI250X"  # ROCM 6.0.3
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
 
