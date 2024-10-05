@@ -459,7 +459,7 @@ def build_rope_cache(
         Tuple[torch.Tensor, torch.Tensor]: Cosine and sine caches for RoPE.
     """
     if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print("warning: build_rope_cache called without device, make sure this is intentional")
 
     # Compute the inverse frequencies theta
     theta = 1.0 / (base ** (torch.arange(0, n_elem, 2, device=device).float() / n_elem))
