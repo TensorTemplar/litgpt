@@ -701,7 +701,7 @@ def test_check_nvlink_connectivity__returns_fully_connected_when_nvidia_all_nvli
 def test_check_nvlink_connectivity_returns_fully_connected_when_amd_all_xgmi(monkeypatch):
     # Mock the GPU device properties to simulate AMD GPUs
     mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
-    mock_device_properties.name = "Advanced Micro Devices [AMD/ATI] MI250X"
+    mock_device_properties.name = "amd instinct mi250x"  # ROCM 6.0.3
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
 
