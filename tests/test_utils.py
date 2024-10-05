@@ -616,6 +616,36 @@ NIC Legend:
     )
 
 
+@pytest.fixture
+def nvidia_smi_nvlink_output_dual_gpu_no_numa():
+    return """
+        GPU0    GPU1
+GPU0    X      NV1
+GPU1    NV1    X
+    """
+
+
+@pytest.fixture
+def rocm_smi_xgmi_output_multi_gpu():
+    """
+    rocm-smi --showtopotype on ROCm 6.0.3+
+    """
+    return """
+=============================== ROCm System Management Interface ============================
+=============================== Link Type between two GPUs ===============================
+       GPU0         GPU1         GPU2         GPU3         GPU4         GPU5         GPU6         GPU7
+GPU0   0            XGMI         XGMI         XGMI         XGMI         XGMI         XGMI         XGMI
+GPU1   XGMI         0            XGMI         XGMI         XGMI         XGMI         XGMI         XGMI
+GPU2   XGMI         XGMI         0            XGMI         XGMI         XGMI         XGMI         XGMI
+GPU3   XGMI         XGMI         XGMI         0            XGMI         XGMI         XGMI         XGMI
+GPU4   XGMI         XGMI         XGMI         XGMI         0            XGMI         XGMI         XGMI
+GPU5   XGMI         XGMI         XGMI         XGMI         XGMI         0            XGMI         XGMI
+GPU6   XGMI         XGMI         XGMI         XGMI         XGMI         XGMI         0            XGMI
+GPU7   XGMI         XGMI         XGMI         XGMI         XGMI         XGMI         XGMI         0
+================================== End of ROCm SMI Log ===================================
+    """
+
+
 @mock.patch("subprocess.run")
 def test_nvlink_all_gpu_connected_but_other_connected_output(
     mock_run, nvlink_all_gpu_connected_but_other_connected_output
@@ -680,39 +710,31 @@ def test_fix_and_load_json():
     assert result_missing_commas == expected_output_missing_commas
 
 
-def test_check_nvlink_connectivity__returns_fully_connected_when_nvidia_all_nvlink(monkeypatch):
+def test_check_nvlink_connectivity__returns_fully_connected_when_nvidia_all_nvlink_two_gpus(
+    monkeypatch, nvidia_smi_nvlink_output_dual_gpu_no_numa
+):
     mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
     mock_device_properties.name = "NVIDIA GeForce RTX 3090"
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
 
-    nvidia_smi_output = """
-    GPU0    GPU1
-    GPU0    X      NV1
-    GPU1    NV1    X
-    """
-    mock_run = mock.MagicMock(return_value=mock.Mock(stdout=nvidia_smi_output, returncode=0))
+    mock_run = mock.MagicMock(return_value=mock.Mock(stdout=nvidia_smi_nvlink_output_dual_gpu_no_numa, returncode=0))
     with mock.patch("subprocess.run", mock_run):
         with mock.patch("builtins.print") as mock_print:
             check_nvlink_connectivity()
             mock_print.assert_any_call("All GPUs are fully connected via NVLink.")
 
 
-def test_check_nvlink_connectivity_returns_fully_connected_when_amd_all_xgmi(monkeypatch):
+def test_check_nvlink_connectivity_returns_fully_connected_when_amd_all_xgmi_8_gpus(
+    monkeypatch, rocm_smi_xgmi_output_multi_gpu
+):
     # Mock the GPU device properties to simulate AMD GPUs
     mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
     mock_device_properties.name = "amd instinct mi250x"  # ROCM 6.0.3
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
 
-    rocm_smi_output = """
-    =============================== Link Type between two GPUs ===============================
-        GPU0         GPU1
-    GPU0   0            XGMI
-    GPU1   XGMI         0
-    ==========================================================================================
-    """
-    mock_run = mock.MagicMock(return_value=mock.Mock(stdout=rocm_smi_output, returncode=0))
+    mock_run = mock.MagicMock(return_value=mock.Mock(stdout=rocm_smi_xgmi_output_multi_gpu, returncode=0))
     with mock.patch("subprocess.run", mock_run):
         with mock.patch("builtins.print") as mock_print:
             check_nvlink_connectivity()
