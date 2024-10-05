@@ -494,7 +494,7 @@ def mock_cuda_is_available_true(monkeypatch):
 def mock_nvidia_device_properties(monkeypatch):
     """Fixture to mock torch.cuda.get_device_properties() for NVIDIA GPUs."""
     mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
-    mock_device_properties.name = "NVIDIA GeForce RTX 3090"
+    mock_device_properties.name = "NVIDIA RTX A6000"
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
 
 
@@ -502,7 +502,7 @@ def mock_nvidia_device_properties(monkeypatch):
 def mock_amd_device_properties(monkeypatch):
     """Fixture to mock torch.cuda.get_device_properties() for AMD GPUs."""
     mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
-    mock_device_properties.name = "amd instinct mi250x"
+    mock_device_properties.name = "AMD Instinct MI250X"
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
 
 
@@ -659,27 +659,34 @@ def test_nvlink_all_gpu_connected_but_other_connected_output(
 
 @pytest.fixture
 def nvidia_smi_nvlink_output_dual_gpu_no_numa():
-    return """
-        GPU0    GPU1
-GPU0    X      NV1
-GPU1    NV1    X
-    """
+    return mock.MagicMock(
+        stdout="""
+        GPU0    GPU1    CPU Affinity    NUMA Affinity   GPU NUMA ID
+GPU0     X      NV1     0-15    0               N/A
+GPU1    NV1      X      0-15    0               N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+    """,
+        returncode=0,
+    )
 
 
 @mock.patch("subprocess.run")
 def test_check_nvlink_connectivity__returns_fully_connected_when_nvidia_all_nvlink_two_gpus(
-    monkeypatch, nvidia_smi_nvlink_output_dual_gpu_no_numa
+    mock_run, all_nvlink_connected_output, mock_cuda_is_available_true, mock_nvidia_device_properties
 ):
-    mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
-    mock_device_properties.name = "NVIDIA RTX A6000"
-    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-
-    mock_run = mock.MagicMock(return_value=mock.Mock(stdout=nvidia_smi_nvlink_output_dual_gpu_no_numa, returncode=0))
-    with mock.patch("subprocess.run", mock_run):
-        with mock.patch("builtins.print") as mock_print:
-            check_nvlink_connectivity()
-            mock_print.assert_any_call("All GPUs are fully connected via NVLink.")
+    mock_run.return_value = all_nvlink_connected_output
+    with mock.patch("builtins.print") as mock_print:
+        check_nvlink_connectivity()
+        mock_print.assert_any_call("All GPUs are fully connected via NVLink.")
 
 
 @pytest.fixture
@@ -687,7 +694,8 @@ def rocm_smi_xgmi_output_multi_gpu():
     """
     rocm-smi --showtopotype on ROCm 6.0.3+
     """
-    return """
+    return mock.MagicMock(
+        stdout="""
 =============================== ROCm System Management Interface ============================
 =============================== Link Type between two GPUs ===============================
        GPU0         GPU1         GPU2         GPU3         GPU4         GPU5         GPU6         GPU7
@@ -700,22 +708,19 @@ GPU5   XGMI         XGMI         XGMI         XGMI         XGMI         0       
 GPU6   XGMI         XGMI         XGMI         XGMI         XGMI         XGMI         0            XGMI
 GPU7   XGMI         XGMI         XGMI         XGMI         XGMI         XGMI         XGMI         0
 ================================== End of ROCm SMI Log ===================================
-    """
+    """,
+        returncode=0,
+    )
 
 
+@mock.patch("subprocess.run")
 def test_check_nvlink_connectivity_returns_fully_connected_when_amd_all_xgmi_8_gpus(
-    monkeypatch, rocm_smi_xgmi_output_multi_gpu
+    mock_run, rocm_smi_xgmi_output_multi_gpu, mock_cuda_is_available_true, mock_amd_device_properties
 ):
-    mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
-    mock_device_properties.name = "AMD INSTINCT MI250X"  # ROCM 6.0.3
-    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-
-    mock_run = mock.MagicMock(return_value=mock.Mock(stdout=rocm_smi_xgmi_output_multi_gpu, returncode=0))
-    with mock.patch("subprocess.run", mock_run):
-        with mock.patch("builtins.print") as mock_print:
-            check_nvlink_connectivity()
-            mock_print.assert_any_call("All GPUs are fully connected via XGMI.")
+    mock_run.return_value = rocm_smi_xgmi_output_multi_gpu
+    with mock.patch("builtins.print") as mock_print:
+        check_nvlink_connectivity()
+        mock_print.assert_any_call("All GPUs are fully connected via XGMI.")
 
 
 @mock.patch("subprocess.run")
@@ -727,15 +732,13 @@ def test_check_nvlink_connectivity_returns_no_gpus_when_no_gpus(mock_run, monkey
 
 
 @mock.patch("subprocess.run")
-def test_check_nvlink_connectivity_returns_unrecognized_vendor_when_unrecognized_vendor(mock_run, monkeypatch):
+def test_check_nvlink_connectivity_returns_unrecognized_vendor_when_unrecognized_vendor(mock_run, monkeypatch, mock_cuda_is_available_true):
     mock_device_properties = mock.MagicMock(name="GPU Device", spec=["name"])
-    mock_device_properties.name = "Unknown GPU Vendor"
+    mock_device_properties.name = "GARAGE DIY HYPERSCALER GPU"
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda idx: mock_device_properties)
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-
     with mock.patch("builtins.print") as mock_print:
         check_nvlink_connectivity()
-        mock_print.assert_any_call("Unrecognized GPU vendor: Unknown GPU Vendor")
+        mock_print.assert_any_call("Unrecognized GPU vendor: GARAGE DIY HYPERSCALER GPU")
 
 
 def test_fix_and_load_json():
