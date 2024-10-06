@@ -15,6 +15,7 @@ from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.utilities import ThroughputMonitor
 from lightning_utilities.core.imports import RequirementCache
 from torch.utils.data import DataLoader, ConcatDataset
+from torch.distributed.fsdp.wrap import wrap
 from torchmetrics import RunningMean
 
 from litgpt.args import EvalArgs, TrainArgs
@@ -41,6 +42,16 @@ from litgpt.utils import (
     parse_devices,
     save_hyperparameters,
 )
+
+def custom_auto_wrap_policy(module, recurse, unwrapped_params):
+    # Only wrap modules where all parameters require grad
+    requires_grad = any(p.requires_grad for p in module.parameters())
+    mixed_grad = any(p.requires_grad != requires_grad for p in module.parameters())
+    
+    if mixed_grad:
+        return False 
+    else:
+        return requires_grad
 
 
 def setup(
@@ -144,8 +155,9 @@ def setup(
                 "Quantization is currently not supported for multi-GPU training. Please set devices=1 and num_nodes=1"
                 " when using the --quantize flag."
             )
+        
         strategy = FSDPStrategy(
-            auto_wrap_policy={Block},
+            auto_wrap_policy=custom_auto_wrap_policy,
             activation_checkpointing_policy={Block},
             state_dict_type="full",
             limit_all_gathers=True,
