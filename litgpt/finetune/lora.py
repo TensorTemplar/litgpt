@@ -3,6 +3,7 @@ import dataclasses
 import math
 import os
 import time
+from functools import partial
 from pathlib import Path
 from pprint import pprint
 from typing import Dict, List, Literal, Optional, Tuple, Union
@@ -15,13 +16,13 @@ from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.utilities import ThroughputMonitor
 from lightning_utilities.core.imports import RequirementCache
 from torch.utils.data import DataLoader, ConcatDataset
-from torch.distributed.fsdp.wrap import wrap
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torchmetrics import RunningMean
 
 from litgpt.args import EvalArgs, TrainArgs
 from litgpt.data import Alpaca, DataModule
 from litgpt.generate.base import generate
-from litgpt.lora import GPT, Block, Config, lora_filter, mark_only_lora_as_trainable
+from litgpt.lora import GPT, Block, Config, LoRALinear, LoRAQKVLinear, lora_filter, mark_only_lora_as_trainable
 from litgpt.prompts import save_prompt_style
 from litgpt.scripts.merge_lora import merge_lora
 from litgpt.tokenizer import Tokenizer
@@ -43,15 +44,26 @@ from litgpt.utils import (
     save_hyperparameters,
 )
 
-def custom_auto_wrap_policy(module, recurse, unwrapped_params):
-    # Only wrap modules where all parameters require grad
-    requires_grad = any(p.requires_grad for p in module.parameters())
-    mixed_grad = any(p.requires_grad != requires_grad for p in module.parameters())
-    
-    if mixed_grad:
-        return False 
-    else:
-        return requires_grad
+def combined_auto_wrap_policy(
+    module: torch.nn.Module,
+    recurse: bool,
+    nonwrapped_numel: int,
+    module_is_root: bool,
+) -> bool:
+    default_policy = partial(
+        transformer_auto_wrap_policy,
+        transformer_layer_cls={Block},
+    )
+    if default_policy(
+        module=module,
+        recurse=recurse,
+        nonwrapped_numel=nonwrapped_numel,
+        module_is_root=module_is_root,
+    ):
+        return True
+    if isinstance(module, (LoRALinear, LoRAQKVLinear)):
+        return True
+    return False
 
 
 def setup(
@@ -157,7 +169,7 @@ def setup(
             )
         
         strategy = FSDPStrategy(
-            auto_wrap_policy=custom_auto_wrap_policy,
+            auto_wrap_policy=combined_auto_wrap_policy,
             activation_checkpointing_policy={Block},
             state_dict_type="full",
             limit_all_gathers=True,
