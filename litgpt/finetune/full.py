@@ -83,7 +83,7 @@ def setup(
         access_token: Optional API token to access models with restrictions.
     """
     checkpoint_dir = auto_download_checkpoint(model_name=checkpoint_dir, access_token=access_token)
-    pprint(locals())
+    # pprint(locals())
     data = Alpaca() if data is None else data
     devices = parse_devices(devices)
     out_dir = init_out_dir(out_dir)
@@ -375,10 +375,17 @@ def get_dataloaders(
 ) -> Tuple[DataLoader, DataLoader]:
     data.connect(tokenizer=tokenizer, batch_size=train.micro_batch_size, max_seq_length=train.max_seq_length)
     with fabric.rank_zero_first():
+        if fabric.global_rank == 0:
+            fabric.print("Preparing data ...")
         data.prepare_data()
+
+    if fabric.global_rank == 0:
+        fabric.print("Setting up data ...")
     data.setup()
     train_dataloader = data.train_dataloader()
     val_dataloader = data.val_dataloader()
+    if fabric.global_rank == 0:
+        fabric.print("Setting up dataloaders ...")
     train_dataloader, val_dataloader = fabric.setup_dataloaders(train_dataloader, val_dataloader)
     return train_dataloader, val_dataloader
 
