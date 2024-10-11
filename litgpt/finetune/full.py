@@ -164,9 +164,13 @@ def main(
         fabric.print(f"Resuming training from {resume}")
         fabric.load(resume, state)
     else:
+        if fabric.global_rank == 0:
+            fabric.print("Loading checkpoint ...")
         load_checkpoint(fabric, state["model"], checkpoint_path)
 
     train_time = time.perf_counter()
+    if fabric.global_rank == 0:
+        fabric.print("Starting training ...")
     fit(fabric, state, train_dataloader, val_dataloader, devices, resume, checkpoint_dir, out_dir, train, eval, data)
     fabric.print(f"Training time: {(time.perf_counter()-train_time):.2f}s")
     if fabric.device.type == "cuda":
@@ -207,11 +211,10 @@ def fit(
     optimizer = state["optimizer"]
     scheduler = state["scheduler"]
     tokenizer = Tokenizer(checkpoint_dir)
-    longest_seq_length, longest_seq_ix = get_longest_seq_length(ConcatDataset([train_dataloader.dataset, val_dataloader.dataset]))
-    model.max_seq_length = min(longest_seq_length, train.max_seq_length or float("inf"))
+    # longest_seq_length, longest_seq_ix = get_longest_seq_length(ConcatDataset([train_dataloader.dataset, val_dataloader.dataset]))
+    model.max_seq_length = train.max_seq_length or float("inf")
     fabric.print(
-        f"The longest sequence length in the train data is {longest_seq_length}, the model's maximum sequence length is"
-        f" {model.max_seq_length} and context length is {model.config.block_size}"
+        f"the model's maximum sequence length is set to {model.max_seq_length} and context length is {model.config.block_size}"
     )
 
     if eval.initial_validation:
