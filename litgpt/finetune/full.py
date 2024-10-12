@@ -2,6 +2,7 @@
 import dataclasses
 import math
 import os
+import tracemalloc
 import time
 from pathlib import Path
 from pprint import pprint
@@ -136,8 +137,15 @@ def main(
 ) -> None:
     validate_args(train, eval)
 
+    tracemalloc.start()
     tokenizer = Tokenizer(checkpoint_dir)
+    snapshot_before = tracemalloc.take_snapshot()
     train_dataloader, val_dataloader = get_dataloaders(fabric, data, tokenizer, train)
+    snapshot_after = tracemalloc.take_snapshot()
+    stats = snapshot_after.compare_to(snapshot_before, "lineno")
+    fabric.print("Memory allocation stats after dataloader creation:")
+    for stat in stats[:10]:
+        fabric.print(stat)
     steps_per_epoch = len(train_dataloader) // train.gradient_accumulation_iters(devices)
     lr_max_steps = min(train.epochs * steps_per_epoch, (train.max_steps or float("inf")))
 
@@ -147,15 +155,28 @@ def main(
         os.makedirs(out_dir, exist_ok=True)
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
+    snapshot_before = tracemalloc.take_snapshot()
     with fabric.init_module(empty_init=(fabric.world_size > 1)):
         model = GPT(config)
+    snapshot_after = tracemalloc.take_snapshot()
+    stats = snapshot_after.compare_to(snapshot_before, "lineno")
+    fabric.print("Memory allocation stats after model creation:")
+    for stat in stats[:10]:
+        fabric.print(stat)
 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
 
     model = fabric.setup(model)
 
+    snapshot_before = tracemalloc.take_snapshot()
     optimizer = instantiate_torch_optimizer(optimizer, model.parameters())
     optimizer = fabric.setup_optimizers(optimizer)
+    snapshot_after = tracemalloc.take_snapshot()
+    stats = snapshot_after.compare_to(snapshot_before, "lineno")
+    fabric.print("Memory allocation stats after optimizer creation:")
+    for stat in stats[:10]:
+        fabric.print(stat)
+
     scheduler = get_lr_scheduler(optimizer, warmup_steps=train.lr_warmup_steps, max_steps=lr_max_steps)
     state = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
 
@@ -166,7 +187,13 @@ def main(
     else:
         if fabric.global_rank == 0:
             fabric.print("Loading checkpoint ...")
+        snapshot_before = tracemalloc.take_snapshot()
         load_checkpoint(fabric, state["model"], checkpoint_path)
+        snapshot_after = tracemalloc.take_snapshot()
+        stats = snapshot_after.compare_to(snapshot_before, "lineno")
+        fabric.print("Memory allocation stats after checkpoint loading:")
+        for stat in stats[:10]:
+            fabric.print(stat)
 
     train_time = time.perf_counter()
     if fabric.global_rank == 0:

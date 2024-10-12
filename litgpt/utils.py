@@ -374,6 +374,8 @@ def get_default_supported_precision(training: bool) -> str:
 
 def load_checkpoint(fabric: L.Fabric, model: nn.Module, checkpoint_path: Path, strict: bool = True) -> None:
     if isinstance(fabric.strategy, FSDPStrategy):
+        if fabric.global_rank == 0:
+            fabric.print(f"Detected FSDP, will load_raw from {checkpoint_path} ...")
         fabric.load_raw(checkpoint_path, model, strict=strict)
     else:
         state_dict = lazy_load(checkpoint_path)
