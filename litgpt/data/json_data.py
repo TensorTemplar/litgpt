@@ -85,6 +85,8 @@ class JSON(DataModule):
     """Whether to use lazy loading of the data from disk, instead of storing the data in RAM."""
     shuffle_training_data: bool = True
     """Whether to shuffle the training data every epoch."""
+    pin_memory: bool = False
+    """Whether to pin memory for the DataLoader."""
 
     tokenizer: Optional[Tokenizer] = field(default=None, init=False, repr=False)
     batch_size: int = field(default=1, init=False, repr=False)
@@ -215,6 +217,7 @@ class JSON(DataModule):
             generator=torch.Generator().manual_seed(self.seed),
             num_workers=self.num_workers if not self.use_lazy_loading else 0,
             collate_fn=get_sft_collate_fn(max_seq_length=self.max_seq_length, ignore_index=self.ignore_index),
+            pin_memory=self.pin_memory,
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -224,6 +227,7 @@ class JSON(DataModule):
             shuffle=False,
             num_workers=self.num_workers if not self.use_lazy_loading else 0,
             collate_fn=get_sft_collate_fn(max_seq_length=self.max_seq_length, ignore_index=self.ignore_index),
+            pin_memory=self.pin_memory,
         )
 
     def get_split_indices(self, total_length: int) -> Tuple[List[int], List[int]]:

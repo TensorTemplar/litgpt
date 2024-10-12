@@ -181,7 +181,7 @@ def main(
         val_loss = validate(fabric, model, val_dataloader, dataclasses.replace(eval, max_iters=len(val_dataloader)))
         metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
         fabric.log_dict(metrics, step=state["iter_num"])
-        fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
+        fabric.print(f"Final evaluation | val loss: {val_loss.detach():.3f} | val ppl: {math.exp(val_loss):.3f}")
 
     # Save the final checkpoint at the end of training
     save_path = out_dir / "final" / "lit_model.pth"
@@ -269,7 +269,7 @@ def fit(
             state["step_count"] += 1
 
         if state["iter_num"] % train.log_interval == 0:
-            loss = running_loss.compute().item()  # expensive device-to-host synchronization
+            loss = running_loss.compute().detach()  # expensive device-to-host synchronization
             t1 = time.perf_counter()
             metrics = {
                 "loss": loss,
@@ -299,7 +299,7 @@ def fit(
             val_loss = validate(fabric, model, val_dataloader, eval)
             generate_example(fabric, model, tokenizer, eval, data)
             t1 = time.perf_counter() - t0
-            fabric.print(f"iter {state['iter_num']}: val loss {val_loss.item():.4f}, val time: {t1 * 1000:.2f} ms")
+            fabric.print(f"iter {state['iter_num']}: val loss {val_loss.detach():.4f}, val time: {t1 * 1000:.2f} ms")
             metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
             fabric.log_dict(metrics, step=state["iter_num"])
             fabric.barrier()
