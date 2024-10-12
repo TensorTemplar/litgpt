@@ -152,8 +152,6 @@ def main(
         # model = GPT(config)
     
     model = GPT(config)
-
-
     model = fabric.setup(model)
     scheduler = get_lr_scheduler(optimizer, warmup_steps=train.lr_warmup_steps, max_steps=lr_max_steps)
     state = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
@@ -165,7 +163,7 @@ def main(
     else:
         if fabric.global_rank == 0:
             fabric.print("Loading checkpoint ...")
-        fabric.load(path=checkpoint_path, state=state["model"], strict=True)
+        fabric.load_raw(path=checkpoint_path, state=state["model"], strict=True)
         # load_checkpoint(fabric, state["model"], checkpoint_path)
 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")

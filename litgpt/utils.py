@@ -376,7 +376,7 @@ def load_checkpoint(fabric: L.Fabric, model: nn.Module, checkpoint_path: Path, s
     if isinstance(fabric.strategy, FSDPStrategy):
         if fabric.global_rank == 0:
             fabric.print(f"Detected FSDP, will load_raw from {checkpoint_path} ...")
-        fabric.load(path=checkpoint_path, state=model, strict=strict)
+        fabric.load_raw(checkpoint_path, model, strict=strict)
 
     else:
         state_dict = lazy_load(checkpoint_path)
