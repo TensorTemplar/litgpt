@@ -24,16 +24,16 @@ class LightningGPT(LightningModule):
         super().__init__()
         assert config.padded_vocab_size is not None
         self.config = config
-        self.model = None
+        self.transformer = None
         self.training_args = training_args
 
     def configure_model(self):
-        if self.model is not None:
+        if self.transformer is not None:
             return
-        self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias)
-        self.model = nn.ModuleDict(
+        self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias, device=self.device)
+        self.transformer = nn.ModuleDict(
             dict(
-                wte=nn.Embedding(self.config.padded_vocab_size, self.config.n_embd),
+                wte=nn.Embedding(self.config.padded_vocab_size, self.config.n_embd, device=self.device),
                 h=nn.ModuleList(Block(self.config, block_idx) for block_idx in range(self.config.n_layer)),
                 ln_f=self.config.norm_class(self.config.n_embd, eps=self.config.norm_eps),
             )
@@ -47,7 +47,7 @@ class LightningGPT(LightningModule):
         **Dictionary**, with an ``"optimizer"`` key, and (optionally) a ``"lr_scheduler"``
               key whose value is a single LR scheduler or ``lr_scheduler_config``.
         """
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.training_args.learning_rate)
+        optimizer = torch.optim.AdamW(self.transformer.parameters(), lr=self.training_args.learning_rate)
         scheduler1 = torch.optim.lr_scheduler.LambdaLR(
             optimizer, lambda step: min(1.0, step / self.training_args.lr_warmup_steps)
         )
@@ -90,13 +90,13 @@ class LightningGPT(LightningModule):
             sin = self.sin[:T]
             mask = None
 
-        x = self.model.wte(input_ids)  # Token embeddings of shape (b, t, n_embd)
+        x = self.transformer.wte(input_ids)  # Token embeddings of shape (b, t, n_embd)
         if self.config.scale_embeddings:
             x = x * (self.config.n_embd**0.5)
 
-        for block in self.model.h:
+        for block in self.transformer.h:
             x = block(x, cos, sin, mask, input_pos)
-        x = self.model.ln_f(x)
+        x = self.transformer.ln_f(x)
         x = self.lm_head(x)  # (b, t, vocab_size)
         if self.config.final_logit_softcapping is not None:
             x = x.tanh() / self.config.final_logit_softcapping * self.config.final_logit_softcapping
@@ -219,7 +219,7 @@ class LightningGPT(LightningModule):
             max_seq_length = self.max_seq_length
 
         # initialize the kv cache for all blocks
-        for block in self.model.h:
+        for block in self.transformer.h:
             block.attn.kv_cache = block.attn.build_kv_cache(
                 batch_size,
                 max_seq_length,
@@ -235,5 +235,5 @@ class LightningGPT(LightningModule):
 
     def clear_kv_cache(self) -> None:
         self.mask_cache = None
-        for block in self.model.h:
+        for block in self.transformer.h:
             block.attn.kv_cache = None
