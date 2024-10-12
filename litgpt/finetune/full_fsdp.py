@@ -155,8 +155,8 @@ def main(
             model.configure_model()
             fabric.print(f"{get_utc_timestamp()} Setting up model on rank {fabric.global_rank}")
             model = fabric.setup_module(model, _reapply_compile=False)
-        fabric.barrier()
 
+    fabric.barrier()
     fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
     maybe_state_dict = model.configure_optimizers()
     maybe_state_dict = {**maybe_state_dict, "iter_num": 0, "step_count": 0}
