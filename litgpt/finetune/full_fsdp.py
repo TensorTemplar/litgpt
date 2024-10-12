@@ -151,27 +151,26 @@ def main(
         model = LightningGPT(config=config, training_args=train)
     
     # Staggered model configuration across ranks
+    # very slow without re-sharing the weights, but avoids loading more than one model size into RAM at a time
+    # TODO: at least parallelize within each node
     for rank in range(fabric.world_size):
         if fabric.global_rank == rank:
-            fabric.print(f"{get_utc_timestamp()} Configuring model on rank {fabric.global_rank}")
+            fabric.print(f"{get_utc_timestamp()} Configuring model on node {node_rank}. Ranks: {fabric.global_rank}")
             model.configure_model()
-            fabric.print(f"{get_utc_timestamp()} Setting up model on rank {fabric.global_rank}")
-            model = fabric.setup_module(model, _reapply_compile=False)
+            fabric.print(f"{get_utc_timestamp()} Setting up model on node {node_rank}. Ranks: {fabric.global_rank}")
+            model = fabric.setup_module(model, _reapply_compile=True)
         fabric.barrier()
     
-    fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
+    # fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
     maybe_state_dict = model.configure_optimizers()
     maybe_state_dict = {**maybe_state_dict, "iter_num": 0, "step_count": 0}
-    # maybe_state_dict = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
-    # We do not have any states to resume from, so we load the checkpoint directly
-    # This api seems not to be documented
-    fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
+
+    if fabric.global_rank == 0:
+        fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
     with fabric.strategy.module_sharded_context():
         fabric.barrier()
         fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
-    # state = fabric.load(path=checkpoint_path, state={"model": model, **maybe_state_dict}, strict=True)
 
-    
     train_time = time.perf_counter()
     fit(
         fabric=fabric,
