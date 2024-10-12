@@ -1,12 +1,19 @@
 # Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file.
 
 import warnings
+
 import torch
+from jsonargparse import CLI
+from jsonargparse import set_config_read_mode
+from jsonargparse import set_docstring_parse_options
 
 from litgpt.chat.base import main as chat_fn
+from litgpt.deploy.serve import run_server as serve_fn
+from litgpt.eval.evaluate import convert_and_evaluate as evaluate_fn
 from litgpt.finetune.adapter import setup as finetune_adapter_fn
 from litgpt.finetune.adapter_v2 import setup as finetune_adapter_v2_fn
 from litgpt.finetune.full import setup as finetune_full_fn
+from litgpt.finetune.full_fsdp import setup as finetune_full_fsdp_fn
 from litgpt.finetune.lora import setup as finetune_lora_fn
 from litgpt.generate.adapter import main as generate_adapter_fn
 from litgpt.generate.adapter_v2 import main as generate_adapter_v2_fn
@@ -22,9 +29,6 @@ from litgpt.scripts.convert_pretrained_checkpoint import (
 )
 from litgpt.scripts.download import download_from_hub as download_fn
 from litgpt.scripts.merge_lora import merge_lora as merge_lora_fn
-from litgpt.eval.evaluate import convert_and_evaluate as evaluate_fn
-from litgpt.deploy.serve import run_server as serve_fn
-from jsonargparse import set_config_read_mode, set_docstring_parse_options, CLI
 
 
 def main() -> None:
@@ -34,6 +38,7 @@ def main() -> None:
         "finetune": finetune_lora_fn,
         "finetune_lora": finetune_lora_fn,
         "finetune_full": finetune_full_fn,
+        "finetune_full_fsdp": finetune_full_fsdp_fn,
         "finetune_adapter": finetune_adapter_fn,
         "finetune_adapter_v2": finetune_adapter_v2_fn,
         "pretrain": pretrain_fn,
