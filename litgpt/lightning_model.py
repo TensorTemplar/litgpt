@@ -50,6 +50,8 @@ class LightningGPT(LightningModule):
         self.transformer["ln_f"] = self.config.norm_class(self.config.n_embd, eps=self.config.norm_eps)
         self.max_seq_length = self.config.block_size
         self.mask_cache: Optional[torch.Tensor] = None
+        total_params = sum(p.numel() for p in self.parameters())
+        print(f"Total number of parameters: {total_params}")
 
     def configure_optimizers(self) -> Dict[str, Any]:  # type: ignore
         """

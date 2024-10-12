@@ -109,7 +109,6 @@ def setup(
         state_dict_type="full",
         limit_all_gathers=True,
         cpu_offload=cpu_offload,
-        precision=precision,
     )
 
     fabric = L.Fabric(devices=devices, num_nodes=num_nodes, strategy=strategy, precision=precision, loggers=logger)
@@ -136,12 +135,12 @@ def main(
 ) -> None:
     validate_args(train, eval)
 
+    fabric.seed_everything(seed)  # same seed for every process to init model (FSDP)
+    
     tokenizer = Tokenizer(checkpoint_dir)
     train_dataloader, val_dataloader = get_dataloaders(fabric=fabric, data=data, tokenizer=tokenizer, train=train)
     steps_per_epoch = len(train_dataloader) // train.gradient_accumulation_iters(devices)
     lr_max_steps = min(train.epochs * steps_per_epoch, (train.max_steps or float("inf")))
-
-    fabric.seed_everything(seed)  # same seed for every process to init model (FSDP)
 
     if fabric.global_rank == 0:
         os.makedirs(out_dir, exist_ok=True)
