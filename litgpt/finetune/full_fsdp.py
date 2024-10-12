@@ -159,7 +159,7 @@ def main(
     # This api seems not to be documented
     fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
     # fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
-    fabric.load(path=checkpoint_path, state=maybe_state_dict, strict=True)
+    fabric.load(path=checkpoint_path, state={"model": model, **maybe_state_dict}, strict=True)
 
     
     train_time = time.perf_counter()
