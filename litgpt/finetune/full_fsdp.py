@@ -146,12 +146,10 @@ def main(
         os.makedirs(out_dir, exist_ok=True)
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
-    fabric.barrier()
-    model = None
     with fabric.strategy.module_sharded_context():
+        model = LightningGPT(config=config, training_args=train)
         if fabric.global_rank == 0:
             fabric.print(f"{get_utc_timestamp()} Configuring model on {fabric.global_rank}")
-            model = LightningGPT(config=config, training_args=train)
             model.configure_model()
             fabric.print(f"{get_utc_timestamp()} Setting up model on rank {fabric.global_rank}")
             model = fabric.setup_module(model, _reapply_compile=False)
