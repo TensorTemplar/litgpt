@@ -147,7 +147,7 @@ def main(
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     model = LightningGPT(config=config, training_args=train)
-    model.configure_model()
+    # model.configure_model()
 
     # state = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
     # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Opt
@@ -155,7 +155,7 @@ def main(
 
     # We do not have any states to resume from, so we load the checkpoint directly
     # This api seems not to be documented
-    fabric.print(f"Loading checkpoint from {checkpoint_path}")
+    fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
     fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
 
     maybe_state_dict = model.configure_optimizers()
@@ -175,8 +175,8 @@ def main(
         data=data,
     )
 
-    fabric.print(f"Training time: {(time.perf_counter()-train_time):.2f}s")
-    fabric.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
+    fabric.print(f"{get_utc_timestamp()} Training time: {(time.perf_counter()-train_time):.2f}s")
+    fabric.print(f"{get_utc_timestamp()} Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
 
     # Final evaluation
     if eval.final_validation:
@@ -186,7 +186,7 @@ def main(
             val_dataloader=val_dataloader,
             eval=dataclasses.replace(eval, max_iters=len(val_dataloader)),
         )
-        fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
+        fabric.print(f"{get_utc_timestamp()} Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
 
     # Save the final checkpoint at the end of training
     save_path = out_dir / "final" / "lit_model.pth"
