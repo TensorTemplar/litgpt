@@ -149,7 +149,7 @@ def main(
     model = LightningGPT(config=config, training_args=train)
     # model = GPT(config)
     fabric.print(f"{get_utc_timestamp()} Configuring model")
-    model.configure_model()
+    # model.configure_model()
 
     # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Optimizer
     fabric.print(f"{get_utc_timestamp()} Setting up model")

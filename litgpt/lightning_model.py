@@ -30,6 +30,7 @@ class LightningGPT(LightningModule):
         self.training_args = training_args
 
     def configure_model(self) -> None:
+        print("configure_model called")
         if self.transformer is not None:
             return
           
@@ -58,6 +59,7 @@ class LightningGPT(LightningModule):
         **Dictionary**, with an ``"optimizer"`` key, and (optionally) a ``"lr_scheduler"``
               key whose value is a single LR scheduler or ``lr_scheduler_config``.
         """
+        print("configure_optimizers called")
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.training_args.learning_rate)
         scheduler1 = torch.optim.lr_scheduler.LambdaLR(
             optimizer, lambda step: min(1.0, step / self.training_args.lr_warmup_steps)
