@@ -146,8 +146,8 @@ def main(
         os.makedirs(out_dir, exist_ok=True)
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
-    # model = LightningGPT(config=config, training_args=train)
-    model = GPT(config)
+    model = LightningGPT(config=config, training_args=train)
+    # model = GPT(config)
     model.configure_model()
 
     # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Optimizer
