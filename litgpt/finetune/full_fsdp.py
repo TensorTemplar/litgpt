@@ -146,16 +146,16 @@ def main(
         os.makedirs(out_dir, exist_ok=True)
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
+    fabric.barrier()
     with fabric.strategy.module_sharded_context():
-        fabric.print(f"{get_utc_timestamp()} Configuring model on {fabric.local_rank}")
-        model = LightningGPT(config=config, training_args=train)
-        # model.configure_model()
-        fabric.barrier()
-
-    # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Optimizer
-    fabric.print(f"{get_utc_timestamp()} Setting up model")
-    model = fabric.setup(model, _reapply_compile=False)
-
+        if fabric.global_rank == 0:
+            fabric.print(f"{get_utc_timestamp()} Configuring model on {fabric.global_rank}")
+            model = LightningGPT(config=config, training_args=train)
+            model.configure_model()
+            fabric.print(f"{get_utc_timestamp()} Setting up model on rank {fabric.global_rank}")
+            model = fabric.setup_module(model, _reapply_compile=False)
+            fabric.barrier()
+    
     fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
     maybe_state_dict = model.configure_optimizers()
     maybe_state_dict = {**maybe_state_dict, "iter_num": 0, "step_count": 0}

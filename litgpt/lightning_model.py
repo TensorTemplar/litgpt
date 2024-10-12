@@ -26,7 +26,6 @@ class LightningGPT(LightningModule):
         self.config = config
         self.transformer = None
         self.training_args = training_args
-        self.configure_model()
 
     def configure_model(self) -> None:
         if self.transformer is not None:
