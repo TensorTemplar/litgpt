@@ -1,13 +1,11 @@
+import math
 from typing import Any
 from typing import Dict
 from typing import Optional
 from typing import Tuple
-import math
 
 import torch
 from lightning import LightningModule
-from torch import device as torch_device
-from torch import dtype as torch_dtype
 from torch import nn
 from torch import Tensor
 
@@ -33,23 +31,23 @@ class LightningGPT(LightningModule):
         print("configure_model called")
         if self.transformer is not None:
             return
-          
+
         import gc
 
         self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias)
         self.transformer = nn.ModuleDict()
-        self.transformer['wte'] = nn.Embedding(self.config.padded_vocab_size, self.config.n_embd)
+        self.transformer["wte"] = nn.Embedding(self.config.padded_vocab_size, self.config.n_embd)
 
         # Initialize h as an empty ModuleList
-        self.transformer['h'] = nn.ModuleList()
+        self.transformer["h"] = nn.ModuleList()
 
         for block_idx in range(self.config.n_layer):
             block = Block(self.config, block_idx)
-            self.transformer['h'].append(block)
+            self.transformer["h"].append(block)
             # Manually trigger garbage collection
             gc.collect()
 
-        self.transformer['ln_f'] = self.config.norm_class(self.config.n_embd, eps=self.config.norm_eps)
+        self.transformer["ln_f"] = self.config.norm_class(self.config.n_embd, eps=self.config.norm_eps)
         self.max_seq_length = self.config.block_size
         self.mask_cache: Optional[torch.Tensor] = None
 
@@ -151,6 +149,33 @@ class LightningGPT(LightningModule):
         # Trigger resetting the rope-cache
         self.cos, self.sin = self.rope_cache(device=self.cos.device)
 
+    @property
+    def max_seq_length(self) -> int:
+        return self._max_seq_length
+
+    @max_seq_length.setter
+    def max_seq_length(self, value: int) -> None:
+        """
+        When doing inference, the sequences used might be shorter than the model's context length.
+        This allows setting a smaller number to avoid allocating unused memory
+        """
+        if value > self.config.block_size:
+            raise ValueError(
+                f"Cannot attend to {value}, block size is only {self.config.block_size}."
+                " This is likely because the input text exceeds the supported context length of this model."
+            )
+        self._max_seq_length = value
+        if not hasattr(self, "cos"):
+            # first call
+            cos, sin = self.rope_cache()
+            self.register_buffer("cos", cos, persistent=False)
+            self.register_buffer("sin", sin, persistent=False)
+        # override
+        elif value != self.cos.size(0):
+            self.cos, self.sin = self.rope_cache(device=self.cos.device)
+        # the mask and kv cache size will get updated on `set_kv_cache`. we cannot update it here because we don't know
+        # if the kv cache is expected
+
     def rope_cache(self, device: Optional[torch.device] = None) -> Tuple[torch.Tensor, torch.Tensor]:
 
         if self.config.rope_adjustments is None:
@@ -190,32 +215,103 @@ class LightningGPT(LightningModule):
             extra_config=extra_config,
         )
 
-    @property
-    def max_seq_length(self) -> int:
-        return self._max_seq_length
+    def set_kv_cache(
+        self,
+        batch_size: int,
+        max_seq_length: Optional[int] = None,
+        rope_cache_length: Optional[int] = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ) -> None:
+        if rope_cache_length is None:
+            rope_cache_length = self.cos.size(-1)
 
-    @max_seq_length.setter
-    def max_seq_length(self, value: int) -> None:
-        """
-        When doing inference, the sequences used might be shorter than the model's context length.
-        This allows setting a smaller number to avoid allocating unused memory
-        """
-        if value > self.config.block_size:
-            raise ValueError(
-                f"Cannot attend to {value}, block size is only {self.config.block_size}."
-                " This is likely because the input text exceeds the supported context length of this model."
+        if max_seq_length is None:
+            max_seq_length = self.max_seq_length
+
+        # initialize the kv cache for all blocks
+        for block in self.transformer.h:
+            block.attn.kv_cache = block.attn.build_kv_cache(
+                batch_size,
+                max_seq_length,
+                rope_cache_length,
+                device,
+                dtype,
             )
-        self._max_seq_length = value
-        if not hasattr(self, "cos"):
-            # first call
-            cos, sin = self.rope_cache()
-            self.register_buffer("cos", cos, persistent=False)
-            self.register_buffer("sin", sin, persistent=False)
-        # override
-        elif value != self.cos.size(0):
-            self.cos, self.sin = self.rope_cache(device=self.cos.device)
-        # the mask and kv cache size will get updated on `set_kv_cache`. we cannot update it here because we don't know
-        # if the kv cache is expected
+
+        if self.mask_cache is None or self.mask_cache.size(3) != max_seq_length:
+            # passing `attn_mask` to SDPA disables the flash implementation. since we only need the mask
+            # for the kv-cache support (only during inference), we only create it in that situation
+            self.mask_cache = build_mask_cache(max_seq_length, device)
+
+    def clear_kv_cache(self) -> None:
+        self.mask_cache = None
+        for block in self.transformer.h:
+            block.attn.kv_cache = None
+
+
+class Block(nn.Module):
+    def __init__(self, config: Config, block_idx: int) -> None:
+        super().__init__()
+        if not config.parallel_residual and config.shared_attention_norm:
+            raise NotImplementedError(
+                "No checkpoint amongst the ones we support uses this configuration"
+                " (non-parallel residual and shared attention norm)."
+            )
+
+        self.norm_1 = config.norm_class(config.n_embd, eps=config.norm_eps)
+        self.attn = CausalSelfAttention(config, block_idx)
+        self.post_attention_norm = (
+            config.norm_class(config.n_embd, eps=config.norm_eps) if config.post_attention_norm else nn.Identity()
+        )
+        self.norm_2 = None if config.shared_attention_norm else config.norm_class(config.n_embd, eps=config.norm_eps)
+        self.mlp = config.mlp_class(config)
+        self.post_mlp_norm = (
+            config.norm_class(config.n_embd, eps=config.norm_eps) if config.post_mlp_norm else nn.Identity()
+        )
+
+        self.config = config
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        input_pos: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Non-parallel residual       Parallel residual
+           ┌─ x                     ┌─ x ──────────────────┐             Note: if `shared_attention_norm` is True,
+           │  ↓                     │  ↓                   ↓                   the output from `norm_1` is reused
+           │  norm_1                │  norm_1  ───────►    norm_2
+           │  ↓                     │  ↓                   ↓
+           │  attn                  │  attn                MLP
+           │  ↓                     │  ↓                   ↓
+           |  post_attn_norm        |  post_attn_norm      post_mlp_norm
+           |  ↓                     |  ↓                   ↓
+        ┌─ └► +                     └► + ◄─────────────────┘
+        |     ↓
+        │     norm_2
+        │     ↓
+        │     MLP
+        │     ↓
+        |     post_mlp_norm
+        |     ↓
+        └───► +
+        """
+
+        x_normed = self.norm_1(x)
+        attention_output = self.attn(x_normed, cos, sin, mask, input_pos)
+        attention_output = self.post_attention_norm(attention_output)
+
+        if self.config.parallel_residual:
+            x_normed = x_normed if self.config.shared_attention_norm else self.norm_2(x)
+            x = self.mlp(x_normed) + attention_output + x
+        else:
+            x = attention_output + x
+            x = self.post_mlp_norm(self.mlp(self.norm_2(x))) + x
+        return x
 
 
 class CausalSelfAttention(nn.Module):
@@ -326,173 +422,93 @@ class CausalSelfAttention(nn.Module):
             )
         return y.transpose(1, 2)
 
-
-class Block(nn.Module):
-    def __init__(self, config: Config, block_idx: int) -> None:
-        super().__init__()
-        if not config.parallel_residual and config.shared_attention_norm:
-            raise NotImplementedError(
-                "No checkpoint amongst the ones we support uses this configuration"
-                " (non-parallel residual and shared attention norm)."
+    def build_kv_cache(
+        self,
+        batch_size: int,
+        max_seq_length: int,
+        rope_cache_length: Optional[int] = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ) -> "KVCache":
+        heads = 1 if self.config.n_query_groups == 1 else self.config.n_head
+        v_shape = (batch_size, heads, max_seq_length, self.config.head_size)
+        if rope_cache_length is None:
+            if self.config.rotary_percentage != 1.0:
+                raise TypeError("Please pass the `rope_cache_length=gpt.cos.size(-1)` value")
+            k_shape = v_shape
+        else:
+            k_shape = (
+                batch_size,
+                heads,
+                max_seq_length,
+                rope_cache_length + self.config.head_size - self.config.rope_n_elem,
             )
+        return KVCache(k_shape, v_shape, device=device, dtype=dtype)
 
-        self.norm_1 = config.norm_class(config.n_embd, eps=config.norm_eps)
-        self.attn = CausalSelfAttention(config, block_idx)
-        self.post_attention_norm = (
-            config.norm_class(config.n_embd, eps=config.norm_eps) if config.post_attention_norm else nn.Identity()
-        )
-        self.norm_2 = None if config.shared_attention_norm else config.norm_class(config.n_embd, eps=config.norm_eps)
-        self.mlp = config.mlp_class(config)
-        self.post_mlp_norm = (
-            config.norm_class(config.n_embd, eps=config.norm_eps) if config.post_mlp_norm else nn.Identity()
-        )
+
+class GptNeoxMLP(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.fc = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
+        self.proj = nn.Linear(config.intermediate_size, config.n_embd, bias=config.bias)
 
         self.config = config
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
-        input_pos: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.fc(x)
+        x = torch.nn.functional.gelu(x, approximate=self.config.gelu_approximate)
+        return self.proj(x)
+
+
+class LLaMAMLP(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.fc_1 = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
+        self.fc_2 = nn.Linear(config.n_embd, config.intermediate_size, bias=config.bias)
+        self.proj = nn.Linear(config.intermediate_size, config.n_embd, bias=config.bias)
+
+        self.config = config
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_fc_1 = self.fc_1(x)
+        x_fc_2 = self.fc_2(x)
+        x = torch.nn.functional.silu(x_fc_1) * x_fc_2
+        return self.proj(x)
+
+
+class GemmaMLP(LLaMAMLP):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_fc_1 = self.fc_1(x)
+        x_fc_2 = self.fc_2(x)
+        x = torch.nn.functional.gelu(x_fc_1, approximate=self.config.gelu_approximate) * x_fc_2
+        return self.proj(x)
+
+
+class LLaMAMoE(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.gate = nn.Linear(config.n_embd, config.n_expert, bias=False)
+        self.experts = nn.ModuleList(LLaMAMLP(config) for _ in range(config.n_expert))
+
+        self.config = config
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Non-parallel residual       Parallel residual
-           ┌─ x                     ┌─ x ──────────────────┐             Note: if `shared_attention_norm` is True,
-           │  ↓                     │  ↓                   ↓                   the output from `norm_1` is reused
-           │  norm_1                │  norm_1  ───────►    norm_2
-           │  ↓                     │  ↓                   ↓
-           │  attn                  │  attn                MLP
-           │  ↓                     │  ↓                   ↓
-           |  post_attn_norm        |  post_attn_norm      post_mlp_norm
-           |  ↓                     |  ↓                   ↓
-        ┌─ └► +                     └► + ◄─────────────────┘
-        |     ↓
-        │     norm_2
-        │     ↓
-        │     MLP
-        │     ↓
-        |     post_mlp_norm
-        |     ↓
-        └───► +
+        Derived from: https://github.com/mistralai/mistral-src/blob/b46d6/moe_one_file_ref.py#L203-L219
+        See also figure 1 in https://arxiv.org/abs/2211.15841
         """
-
-        x_normed = self.norm_1(x)
-        attention_output = self.attn(x_normed, cos, sin, mask, input_pos)
-        attention_output = self.post_attention_norm(attention_output)
-
-        if self.config.parallel_residual:
-            x_normed = x_normed if self.config.shared_attention_norm else self.norm_2(x)
-            x = self.mlp(x_normed) + attention_output + x
-        else:
-            x = attention_output + x
-            x = self.post_mlp_norm(self.mlp(self.norm_2(x))) + x
-        return x
-
-    @property
-    def max_seq_length(self) -> int:
-        return self._max_seq_length
-
-    @max_seq_length.setter
-    def max_seq_length(self, value: int) -> None:
-        """
-        When doing inference, the sequences used might be shorter than the model's context length.
-        This allows setting a smaller number to avoid allocating unused memory
-        """
-        if value > self.config.block_size:
-            raise ValueError(
-                f"Cannot attend to {value}, block size is only {self.config.block_size}."
-                " This is likely because the input text exceeds the supported context length of this model."
-            )
-        self._max_seq_length = value
-        if not hasattr(self, "cos"):
-            # first call
-            cos, sin = self.rope_cache()
-            self.register_buffer("cos", cos, persistent=False)
-            self.register_buffer("sin", sin, persistent=False)
-        # override
-        elif value != self.cos.size(0):
-            self.cos, self.sin = self.rope_cache(device=self.cos.device)
-        # the mask and kv cache size will get updated on `set_kv_cache`. we cannot update it here because we don't know
-        # if the kv cache is expected
-
-    def reset_parameters(self) -> None:
-        # Trigger resetting the rope-cache
-        self.cos, self.sin = self.rope_cache(device=self.cos.device)
-
-    def rope_cache(self, device: Optional[torch_device] = None) -> Tuple[Tensor, Tensor]:
-
-        if self.config.rope_adjustments is None:
-            extra_config = None
-
-        else:
-            adjusted_params_required = ["factor", "low_freq_factor", "high_freq_factor", "original_max_seq_len"]
-            params_present = [param in self.config.rope_adjustments for param in adjusted_params_required]
-            num_params_present = sum(params_present)
-
-            if num_params_present == 0:
-                extra_config = None  # uses standard RoPE
-            elif num_params_present == 4:
-                # These parameters should always be used together so that we don't interfere with standard rope
-                extra_config = {
-                    "original_max_seq_len": self.config.rope_adjustments["original_max_seq_len"],
-                    "factor": self.config.rope_adjustments["factor"],
-                    "low_freq_factor": self.config.rope_adjustments["low_freq_factor"],
-                    "high_freq_factor": self.config.rope_adjustments["high_freq_factor"],
-                }
-            else:
-                # Some but not all parameters are specified; raise an error
-                missing_params = [
-                    param for param, present in zip(adjusted_params_required, params_present) if not present
-                ]
-                raise ValueError(
-                    f"The following adjusted RoPE parameters are missing in rope_adjustments: {', '.join(missing_params)}. "
-                    "All adjusted RoPE parameters must be specified together."
-                )
-
-        return build_rope_cache(
-            seq_len=self.max_seq_length,
-            n_elem=self.config.rope_n_elem,
-            device=device,
-            condense_ratio=self.config.rope_condense_ratio,
-            base=self.config.rope_base,
-            extra_config=extra_config,
-        )
-
-    def set_kv_cache(
-        self,
-        batch_size: int,
-        max_seq_length: Optional[int] = None,
-        rope_cache_length: Optional[int] = None,
-        device: Optional[torch_device] = None,
-        dtype: Optional[torch_dtype] = None,
-    ) -> None:
-        if rope_cache_length is None:
-            rope_cache_length = self.cos.size(-1)
-
-        if max_seq_length is None:
-            max_seq_length = self.max_seq_length
-
-        # initialize the kv cache for all blocks
-        for block in self.transformer.h:
-            block.attn.kv_cache = block.attn.build_kv_cache(
-                batch_size,
-                max_seq_length,
-                rope_cache_length,
-                device,
-                dtype,
-            )
-
-        if self.mask_cache is None or self.mask_cache.size(3) != max_seq_length:
-            # passing `attn_mask` to SDPA disables the flash implementation. since we only need the mask
-            # for the kv-cache support (only during inference), we only create it in that situation
-            self.mask_cache = build_mask_cache(max_seq_length, device)
-
-    def clear_kv_cache(self) -> None:
-        self.mask_cache = None
-        for block in self.transformer.h:
-            block.attn.kv_cache = None
+        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+        x = x.view(-1, C)  # (B*T, C)
+        router = self.gate(x)  # (B*T, n_expert)
+        probs, indices = torch.topk(router, self.config.n_expert_per_token)  # (B*T, n_expert_per_token)
+        probs = probs.softmax(dim=1, dtype=torch.float).to(dtype=x.dtype)
+        masks = indices.unsqueeze(-1) == torch.arange(self.config.n_expert, device=x.device)
+        masks = masks.permute(2, 0, 1)  # (n_expert, B*T, n_expert_per_token)
+        y = torch.zeros_like(x)  # (B*T, C)
+        for mask, expert in zip(masks, self.experts):
+            token_idx, expert_idx = torch.where(mask)
+            y[token_idx] += probs[token_idx, expert_idx, None] * expert(x[token_idx])
+        return y.view(B, T, C)
 
 
 def build_rope_cache(
