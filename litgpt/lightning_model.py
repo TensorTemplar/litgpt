@@ -33,9 +33,9 @@ class LightningGPT(LightningModule):
         if self.transformer is not None:
             return
           
-        self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias, dtype=torch.bfloat16)
+        self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias)
         self.transformer = nn.Module()
-        self.transformer.wte = nn.Embedding(self.config.padded_vocab_size, self.config.n_embd, dtype=torch.bfloat16)
+        self.transformer.wte = nn.Embedding(self.config.padded_vocab_size, self.config.n_embd)
         
         def block_generator():
             for block_idx in range(self.config.n_layer):
