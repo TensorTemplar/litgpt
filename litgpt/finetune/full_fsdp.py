@@ -105,7 +105,7 @@ def setup(
 
     strategy = FSDPStrategy(
         auto_wrap_policy={torch.nn.Linear, torch.nn.Embedding, Block},
-        activation_checkpointing_policy={torch.nn.Linear, torch.nn.Embedding, Block},
+        activation_checkpointing_policy={torch.nn.Linear, Block},
         state_dict_type="full",
         limit_all_gathers=True,
         cpu_offload=cpu_offload,
