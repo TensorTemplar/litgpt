@@ -31,7 +31,7 @@ class LightningGPT(LightningModule):
         if self.model is not None:
             return
         self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias)
-        self.transformer = nn.ModuleDict(
+        self.model = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(self.config.padded_vocab_size, self.config.n_embd),
                 h=nn.ModuleList(Block(self.config, block_idx) for block_idx in range(self.config.n_layer)),

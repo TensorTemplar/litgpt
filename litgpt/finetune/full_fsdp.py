@@ -166,7 +166,6 @@ def main(
 
     
     train_time = time.perf_counter()
-    # This function expects a state dict but we pass model now which is a LightningModule
     fit(
         fabric=fabric,
         state={"model": model, **maybe_state_dict, "iter_num": 0, "step_count": 0},
