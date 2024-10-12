@@ -32,6 +32,7 @@ class LightningGPT(LightningModule):
         if self.transformer is not None:
             return
 
+        print("loading model")
         import gc
 
         self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias)
