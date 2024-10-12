@@ -156,18 +156,20 @@ def main(
 
     fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
     maybe_state_dict = model.configure_optimizers()
+    maybe_state_dict = {**maybe_state_dict, "iter_num": 0, "step_count": 0}
     # maybe_state_dict = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
     # We do not have any states to resume from, so we load the checkpoint directly
     # This api seems not to be documented
     fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
-    fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
-    # fabric.load(path=checkpoint_path, state={"model": model, **maybe_state_dict}, strict=True)
+    # fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
+    state = fabric.load(path=checkpoint_path, state={"model": model, **maybe_state_dict}, strict=True)
 
     
     train_time = time.perf_counter()
     fit(
         fabric=fabric,
-        state={"model": model, **maybe_state_dict, "iter_num": 0, "step_count": 0},
+        # state={"model": model, **maybe_state_dict, "iter_num": 0, "step_count": 0},
+        state=state,
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
         devices=devices,
