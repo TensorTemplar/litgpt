@@ -24,7 +24,7 @@ from litgpt.args import TrainArgs
 from litgpt.data import DataModule
 from litgpt.generate.base import generate
 from litgpt.lightning_model import LightningGPT
-from litgpt.model import Block
+from litgpt.model import GPT, Block
 from litgpt.model import Config
 from litgpt.prompts import save_prompt_style
 from litgpt.tokenizer import Tokenizer
@@ -146,17 +146,18 @@ def main(
         os.makedirs(out_dir, exist_ok=True)
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
-    model = LightningGPT(config=config, training_args=train)
+    # model = LightningGPT(config=config, training_args=train)
+    model = GPT(config)
     # model.configure_model()
 
     # state = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
     # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Opt
-    model = fabric.setup_module(model)
+    model = fabric.setup(model)
 
     # We do not have any states to resume from, so we load the checkpoint directly
     # This api seems not to be documented
     fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
-    fabric.load_raw(path=checkpoint_path, obj={"model": model}, strict=True)
+    fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
 
     maybe_state_dict = model.configure_optimizers()
     train_time = time.perf_counter()
