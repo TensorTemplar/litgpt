@@ -59,7 +59,6 @@ class LightningGPT(LightningModule):
               key whose value is a single LR scheduler or ``lr_scheduler_config``.
         """
         print("configure_optimizers called, will load model if not already loaded")
-        self.configure_model()
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.training_args.learning_rate)
         scheduler1 = torch.optim.lr_scheduler.LambdaLR(
             optimizer, lambda step: min(1.0, step / self.training_args.lr_warmup_steps)
