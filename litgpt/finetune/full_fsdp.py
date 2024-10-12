@@ -147,8 +147,8 @@ def main(
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     model = LightningGPT(config=config, training_args=train)
-    fabric.print(f"{get_utc_timestamp()} Configuring model")
     if fabric.local_rank == 0:
+        fabric.print(f"{get_utc_timestamp()} Configuring model on {fabric.local_rank}")
         model.configure_model()
 
     # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Optimizer
@@ -156,6 +156,7 @@ def main(
     model = fabric.setup(model, _reapply_compile=False)
 
     fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
+    fabric.barrier()
     maybe_state_dict = model.configure_optimizers()
     # maybe_state_dict = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
     # We do not have any states to resume from, so we load the checkpoint directly
