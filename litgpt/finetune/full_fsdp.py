@@ -147,17 +147,18 @@ def main(
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     # try init_empty_weights after all?
-    model = LightningGPT(config=config, training_args=train)
+    with fabric.init_module(empty_init=True):
+        model = LightningGPT(config=config, training_args=train)
     
     # Staggered model configuration across ranks
     for rank in range(fabric.world_size):
         if fabric.global_rank == rank:
             fabric.print(f"{get_utc_timestamp()} Configuring model on rank {fabric.global_rank}")
             model.configure_model()
+            fabric.print(f"{get_utc_timestamp()} Setting up model on rank {fabric.global_rank}")
+            model = fabric.setup_module(model, _reapply_compile=False)
         fabric.barrier()
     
-    fabric.print(f"{get_utc_timestamp()} Setting up model on rank {fabric.global_rank}")
-    model = fabric.setup_module(model, _reapply_compile=False)
     fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
     maybe_state_dict = model.configure_optimizers()
     maybe_state_dict = {**maybe_state_dict, "iter_num": 0, "step_count": 0}
