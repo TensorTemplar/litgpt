@@ -9,6 +9,7 @@ https://github.com/EleutherAI/gpt-neox/tree/main/megatron/model.
 import math
 from typing import Any, Optional, Tuple
 
+from lightning import LightningModule
 import torch
 import torch.nn as nn
 from typing_extensions import Self
@@ -16,18 +17,23 @@ from typing_extensions import Self
 from litgpt.config import Config
 
 
-class GPT(nn.Module):
+class GPT(LightningModule):
     def __init__(self, config: Config) -> None:
         super().__init__()
         assert config.padded_vocab_size is not None
         self.config = config
 
-        self.lm_head = nn.Linear(config.n_embd, config.padded_vocab_size, bias=config.lm_head_bias)
+    def configure_module(self) -> None:
+        self.lm_head = nn.Linear(
+            self.config.n_embd,
+            self.config.padded_vocab_size,
+            bias=self.config.lm_head_bias,
+        )
         self.transformer = nn.ModuleDict(
             dict(
-                wte=nn.Embedding(config.padded_vocab_size, config.n_embd),
-                h=nn.ModuleList(Block(config, block_idx) for block_idx in range(config.n_layer)),
-                ln_f=config.norm_class(config.n_embd, eps=config.norm_eps),
+                wte=nn.Embedding(self.config.padded_vocab_size, self.config.n_embd),
+                h=nn.ModuleList(Block(self.config, block_idx) for block_idx in range(self.config.n_layer)),
+                ln_f=self.config.norm_class(self.config.n_embd, eps=self.config.norm_eps),
             )
         )
         self.max_seq_length = self.config.block_size
