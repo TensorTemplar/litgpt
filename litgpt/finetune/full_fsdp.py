@@ -109,6 +109,7 @@ def setup(
         state_dict_type="full",
         limit_all_gathers=True,
         cpu_offload=cpu_offload,
+        precision=precision,
     )
 
     fabric = L.Fabric(devices=devices, num_nodes=num_nodes, strategy=strategy, precision=precision, loggers=logger)
@@ -147,14 +148,13 @@ def main(
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     model = LightningGPT(config=config, training_args=train)
-    # model.configure_model()
+    fabric.print(f"{get_utc_timestamp()} Configuring model")
+    model.configure_model()
 
     # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Optimizer
     fabric.print(f"{get_utc_timestamp()} Setting up model")
     model = fabric.setup(model, _reapply_compile=False)
 
-    fabric.print(f"{get_utc_timestamp()} Configuring model")
-    model.configure_model()
     fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
     maybe_state_dict = model.configure_optimizers()
     # maybe_state_dict = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
