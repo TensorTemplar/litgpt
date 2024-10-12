@@ -24,7 +24,7 @@ from litgpt.args import TrainArgs
 from litgpt.data import DataModule
 from litgpt.generate.base import generate
 from litgpt.lightning_model import LightningGPT
-from litgpt.model import GPT, Block
+from litgpt.lightning_model import Block
 from litgpt.model import Config
 from litgpt.prompts import save_prompt_style
 from litgpt.tokenizer import Tokenizer
@@ -104,8 +104,8 @@ def setup(
         raise ValueError("FSDP requires at least 2 GPUs, use the full.py script instead.")
 
     strategy = FSDPStrategy(
-        auto_wrap_policy={Block},
-        activation_checkpointing_policy={Block},
+        auto_wrap_policy={torch.nn.Linear, torch.nn.Embedding},
+        activation_checkpointing_policy={torch.nn.Linear, torch.nn.Embedding},
         state_dict_type="full",
         limit_all_gathers=True,
         cpu_offload=cpu_offload,
