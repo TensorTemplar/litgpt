@@ -159,6 +159,7 @@ class GPT(nn.Module):
             max_seq_length = self.max_seq_length
 
         # initialize the kv cache for all blocks
+        self.fabric.print(f"Initializing KV cache for {len(self.transformer.h)} blocks using device {device}")
         for block in self.transformer.h:
             block.attn.kv_cache = block.attn.build_kv_cache(
                 batch_size, max_seq_length, rope_cache_length, device, dtype,
