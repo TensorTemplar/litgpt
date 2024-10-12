@@ -104,8 +104,8 @@ def setup(
         raise ValueError("FSDP requires at least 2 GPUs, use the full.py script instead.")
 
     strategy = FSDPStrategy(
-        auto_wrap_policy={torch.nn.Linear, torch.nn.Embedding, Block},
-        activation_checkpointing_policy={torch.nn.Linear, Block},
+        auto_wrap_policy={Block},
+        activation_checkpointing_policy={Block},
         state_dict_type="full",
         limit_all_gathers=True,
         cpu_offload=cpu_offload,

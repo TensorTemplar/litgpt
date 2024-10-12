@@ -32,14 +32,17 @@ class LightningGPT(LightningModule):
     def configure_model(self) -> None:
         if self.transformer is not None:
             return
-        self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias)
-        self.transformer = nn.ModuleDict(
-            dict(
-                wte=nn.Embedding(self.config.padded_vocab_size, self.config.n_embd),
-                h=nn.ModuleList(Block(self.config, block_idx) for block_idx in range(self.config.n_layer)),
-                ln_f=self.config.norm_class(self.config.n_embd, eps=self.config.norm_eps),
-            )
-        )
+          
+        self.lm_head = nn.Linear(self.config.n_embd, self.config.padded_vocab_size, bias=self.config.lm_head_bias, dtype=torch.bfloat16)
+        self.transformer = nn.Module()
+        self.transformer.wte = nn.Embedding(self.config.padded_vocab_size, self.config.n_embd, dtype=torch.bfloat16)
+        
+        def block_generator():
+            for block_idx in range(self.config.n_layer):
+                yield Block(self.config, block_idx)
+        
+        self.transformer.h = block_generator()
+        self.transformer.ln_f = self.config.norm_class(self.config.n_embd, eps=self.config.norm_eps)
         self.max_seq_length = self.config.block_size
         self.mask_cache: Optional[torch.Tensor] = None
 
