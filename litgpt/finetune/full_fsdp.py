@@ -148,18 +148,20 @@ def main(
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     # model = LightningGPT(config=config, training_args=train)
     model = GPT(config)
-    # model.configure_model()
+    model.configure_model()
 
-    # state = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
-    # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Opt
+    # Unclear what the correct ordering is with a LightningModule now, below we need the weights to init the Optimizer
     model = fabric.setup(model)
 
+    maybe_state_dict = model.configure_optimizers()
+    # maybe_state_dict = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
     # We do not have any states to resume from, so we load the checkpoint directly
     # This api seems not to be documented
     fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
-    fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
+    # fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
+    fabric.load(path=checkpoint_path, state=maybe_state_dict, strict=True)
 
-    maybe_state_dict = model.configure_optimizers()
+    
     train_time = time.perf_counter()
     # This function expects a state dict but we pass model now which is a LightningModule
     fit(
