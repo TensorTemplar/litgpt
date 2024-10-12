@@ -152,7 +152,6 @@ def main(
         # model = GPT(config)
     
     model = GPT(config)
-    optimizer = instantiate_torch_optimizer(optimizer, model.parameters())
     model = fabric.setup(model, optimizer)
     scheduler = get_lr_scheduler(optimizer, warmup_steps=train.lr_warmup_steps, max_steps=lr_max_steps)
     state = {"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0}
