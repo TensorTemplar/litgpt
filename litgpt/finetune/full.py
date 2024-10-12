@@ -148,9 +148,10 @@ def main(
         os.makedirs(out_dir, exist_ok=True)
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
-    with fabric.init_module(empty_init=(fabric.world_size > 1)):
-        model = GPT(config)
-
+    # with fabric.init_module(empty_init=(fabric.world_size > 1)):
+        # model = GPT(config)
+    
+    model = GPT(config)
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
 
     model = fabric.setup(model)
@@ -166,7 +167,8 @@ def main(
     else:
         if fabric.global_rank == 0:
             fabric.print("Loading checkpoint ...")
-        load_checkpoint(fabric, state["model"], checkpoint_path)
+        fabric.load(path=checkpoint_path, state=state["model"], strict=True)
+        # load_checkpoint(fabric, state["model"], checkpoint_path)
 
     train_time = time.perf_counter()
     if fabric.global_rank == 0:
