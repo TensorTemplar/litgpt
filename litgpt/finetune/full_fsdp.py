@@ -156,7 +156,7 @@ def main(
     # We do not have any states to resume from, so we load the checkpoint directly
     # This api seems not to be documented
     fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
-    fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
+    fabric.load_raw(path=checkpoint_path, obj={"model": model}, strict=True)
 
     maybe_state_dict = model.configure_optimizers()
     train_time = time.perf_counter()
