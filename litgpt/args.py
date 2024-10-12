@@ -36,6 +36,7 @@ class TrainArgs:
     # Optimization args
     max_norm: Optional[float] = None
     min_lr: float = 6e-5
+    learning_rate: Optional[float] = 2e-5
 
     def __post_init__(self) -> None:
         if self.lr_warmup_fraction and self.lr_warmup_steps:
