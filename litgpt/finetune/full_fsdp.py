@@ -139,7 +139,16 @@ def main(
     
     tokenizer = Tokenizer(checkpoint_dir)
     train_dataloader, val_dataloader = get_dataloaders(fabric=fabric, data=data, tokenizer=tokenizer, train=train)
-    
+
+    longest_seq_length, longest_seq_ix = get_longest_seq_length(
+        ConcatDataset([train_dataloader.dataset, val_dataloader.dataset])
+    )
+    model.max_seq_length = min(longest_seq_length, train.max_seq_length or float("inf"))
+    fabric.print(
+        f"The longest sequence length in the train and validation data is {longest_seq_length} at index {longest_seq_ix}, the model's maximum sequence length is"
+        f" {model.max_seq_length} and context length is {model.config.block_size}"
+    )
+
     if fabric.global_rank == 0:
         os.makedirs(out_dir, exist_ok=True)
 
@@ -153,9 +162,9 @@ def main(
     # TODO: at least parallelize within each node
     for rank in range(fabric.world_size):
         if fabric.global_rank == rank:
-            fabric.print(f"{get_utc_timestamp()} Configuring model on node {rank}. Ranks: {fabric.global_rank}")
+            print(f"{get_utc_timestamp()} Configuring model on node {rank}. Ranks: {fabric.global_rank}")
             model.configure_model()
-            fabric.print(f"{get_utc_timestamp()} Setting up model on node {rank}. Ranks: {fabric.global_rank}")
+            print(f"{get_utc_timestamp()} Setting up model on node {rank}. Ranks: {fabric.global_rank}")
             model = fabric.setup_module(model, _reapply_compile=True)
         fabric.barrier()
     
@@ -222,21 +231,11 @@ def fit(
     eval: EvalArgs,
     data: DataModule,
 ) -> None:
+    # TODO: pass these directly as kwargs or create a state object instead
     model = state["model"]
     optimizer = state["optimizer"]
-    scheduler = state["lr_scheduler"]["scheduler"]
+    scheduler = state["scheduler"]
     tokenizer = Tokenizer(checkpoint_dir)
-
-    longest_seq_length, longest_seq_ix = get_longest_seq_length(
-        ConcatDataset([train_dataloader.dataset, val_dataloader.dataset])
-    )
-    model.max_seq_length = min(longest_seq_length, train.max_seq_length or float("inf"))
-    fabric.print(
-        f"The longest sequence length in the train data is {longest_seq_length}, the model's maximum sequence length is"
-        f" {model.max_seq_length} and context length is {model.config.block_size}"
-    )
-    # lets not keep this in memory
-    del longest_seq_length, longest_seq_ix
 
     if eval.initial_validation:
         val_loss = validate(fabric, model, val_dataloader, dataclasses.replace(eval, max_iters=len(val_dataloader)))
