@@ -139,9 +139,7 @@ def main(
     
     tokenizer = Tokenizer(checkpoint_dir)
     train_dataloader, val_dataloader = get_dataloaders(fabric=fabric, data=data, tokenizer=tokenizer, train=train)
-    steps_per_epoch = len(train_dataloader) // train.gradient_accumulation_iters(devices)
-    lr_max_steps = min(train.epochs * steps_per_epoch, (train.max_steps or float("inf")))
-
+    
     if fabric.global_rank == 0:
         os.makedirs(out_dir, exist_ok=True)
 
@@ -161,9 +159,11 @@ def main(
             model = fabric.setup_module(model, _reapply_compile=True)
         fabric.barrier()
     
-    # fabric.print(f"{get_utc_timestamp()} Configuring optimizers")
-    maybe_state_dict = model.configure_optimizers()
-    maybe_state_dict = {**maybe_state_dict, "iter_num": 0, "step_count": 0}
+    # Redundant, consider just moving configure_optimizers internals into this script
+    # if support with fabric cannot be configured
+    training_config = model.configure_optimizers()
+    optimizer = fabric.setup_optimizers(training_config.get("optimizer"))
+    scheduler = training_config.get("lr_scheduler").get("scheduler")
 
     if fabric.global_rank == 0:
         fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
@@ -174,7 +174,7 @@ def main(
     train_time = time.perf_counter()
     fit(
         fabric=fabric,
-        state={"model": model, **maybe_state_dict, "iter_num": 0, "step_count": 0},
+        state={"model": model, "optimizer": optimizer, "scheduler": scheduler, "iter_num": 0, "step_count": 0},
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
         devices=devices,
