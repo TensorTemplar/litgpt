@@ -153,9 +153,9 @@ def main(
     # TODO: at least parallelize within each node
     for rank in range(fabric.world_size):
         if fabric.global_rank == rank:
-            fabric.print(f"{get_utc_timestamp()} Configuring model on node {node_rank}. Ranks: {fabric.global_rank}")
+            fabric.print(f"{get_utc_timestamp()} Configuring model on node {rank}. Ranks: {fabric.global_rank}")
             model.configure_model()
-            fabric.print(f"{get_utc_timestamp()} Setting up model on node {node_rank}. Ranks: {fabric.global_rank}")
+            fabric.print(f"{get_utc_timestamp()} Setting up model on node {rank}. Ranks: {fabric.global_rank}")
             model = fabric.setup_module(model, _reapply_compile=True)
         fabric.barrier()
     
