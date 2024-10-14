@@ -159,9 +159,9 @@ def main(
     # TODO: at least parallelize within each node
     for rank in range(fabric.world_size):
         if fabric.global_rank == rank:
-            print(f"{get_utc_timestamp()} Configuring model on node {rank}. Ranks: {fabric.global_rank}")
+            print(f"{get_utc_timestamp()} Configuring model on local rank {fabric.local_rank}. Ranks: {rank}/{fabric.world_size}")
             model.configure_model()
-            print(f"{get_utc_timestamp()} Setting up model on node {rank}. Ranks: {fabric.global_rank}")
+            print(f"{get_utc_timestamp()} Setting up model on local rank {fabric.local_rank}. Ranks: {rank}/{fabric.world_size}")
             model = fabric.setup_module(model, _reapply_compile=True)
         fabric.barrier()
     
@@ -190,6 +190,7 @@ def main(
         train=train,
         eval=eval,
         data=data,
+        longest_seq_length=longest_seq_length,
     )
 
     fabric.print(f"{get_utc_timestamp()} Training time: {(time.perf_counter()-train_time):.2f}s")
@@ -234,7 +235,7 @@ def fit(
     optimizer = state["optimizer"]
     scheduler = state["scheduler"]
     tokenizer = Tokenizer(checkpoint_dir)
-    
+
     model.max_seq_length = min(longest_seq_length, train.max_seq_length or float("inf"))
     fabric.print(
         f"The longest sequence length in the train and validation data is {longest_seq_length}, config requested a max of {train.max_seq_length}, setting"
