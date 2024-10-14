@@ -139,14 +139,11 @@ def main(
     
     tokenizer = Tokenizer(checkpoint_dir)
     train_dataloader, val_dataloader = get_dataloaders(fabric=fabric, data=data, tokenizer=tokenizer, train=train)
-
     longest_seq_length, longest_seq_ix = get_longest_seq_length(
         ConcatDataset([train_dataloader.dataset, val_dataloader.dataset])
     )
-    model.max_seq_length = min(longest_seq_length, train.max_seq_length or float("inf"))
     fabric.print(
-        f"The longest sequence length in the train and validation data is {longest_seq_length} at index {longest_seq_ix}, the model's maximum sequence length is"
-        f" {model.max_seq_length} and context length is {model.config.block_size}"
+        f"The longest sequence length in the train and validation data is {longest_seq_length} at index {longest_seq_ix}"
     )
 
     if fabric.global_rank == 0:
@@ -230,13 +227,20 @@ def fit(
     train: TrainArgs,
     eval: EvalArgs,
     data: DataModule,
+    longest_seq_length: int,
 ) -> None:
     # TODO: pass these directly as kwargs or create a state object instead
     model = state["model"]
     optimizer = state["optimizer"]
     scheduler = state["scheduler"]
     tokenizer = Tokenizer(checkpoint_dir)
-
+    
+    model.max_seq_length = min(longest_seq_length, train.max_seq_length or float("inf"))
+    fabric.print(
+        f"The longest sequence length in the train and validation data is {longest_seq_length}, config requested a max of {train.max_seq_length}, setting"
+        f" {model.max_seq_length}. Max model context length is {model.config.block_size}"
+    )
+    
     if eval.initial_validation:
         val_loss = validate(fabric, model, val_dataloader, dataclasses.replace(eval, max_iters=len(val_dataloader)))
         val_loss = f"{val_loss:.3f}"
