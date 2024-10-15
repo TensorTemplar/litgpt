@@ -160,11 +160,11 @@ def main(
     for local_rank in range(devices):
         if fabric.local_rank == local_rank:
             print(
-                f"{get_utc_timestamp()} Configuring model on node {fabric.node_rank}, local rank {fabric.local_rank}."
+                f"{get_utc_timestamp()} Configuring model on node {fabric.local_rank}, world rank {fabric.global_rank}."
             )
             model.configure_model()
             print(
-                f"{get_utc_timestamp()} Setting up model on node {fabric.node_rank}, local rank {fabric.local_rank}."
+                f"{get_utc_timestamp()} Setting up model on node {fabric.local_rank}, world rank {fabric.global_rank}."
             )
             model = fabric.setup_module(model, _reapply_compile=True)
         # Synchronize within the node
