@@ -158,17 +158,30 @@ def main(
     # Staggered model configuration across ranks
     # very slow without re-sharing the weights, but avoids loading more than one model size into RAM at a time
     # TODO: at least parallelize within each node
-    for rank in range(fabric.world_size):
-        if fabric.global_rank == rank:
+    # Function to create a process group for the current node
+    def create_node_process_group():
+        num_devices = devices 
+        node_rank = fabric.node_rank
+        # Calculate ranks that are on the current node
+        ranks_on_node = list(range(node_rank * num_devices, (node_rank + 1) * num_devices))
+        node_group = torch.distributed.new_group(ranks=ranks_on_node)
+        return node_group
+
+    node_group = create_node_process_group()
+
+    # Staggered model configuration within each node sequentially, parallel across nodes
+    for local_rank in range(devices):
+        if fabric.local_rank == local_rank:
             print(
-                f"{get_utc_timestamp()} Configuring model on local rank {fabric.local_rank}. Ranks: {rank}/{fabric.world_size}"
+                f"{get_utc_timestamp()} Configuring model on node {fabric.node_rank}, local rank {fabric.local_rank}."
             )
             model.configure_model()
             print(
-                f"{get_utc_timestamp()} Setting up model on local rank {fabric.local_rank}. Ranks: {rank}/{fabric.world_size}"
+                f"{get_utc_timestamp()} Setting up model on node {fabric.node_rank}, local rank {fabric.local_rank}."
             )
             model = fabric.setup_module(model, _reapply_compile=True)
-        fabric.barrier()
+        # Synchronize within the node
+        torch.distributed.barrier(group=node_group)
 
     steps_per_epoch = len(train_dataloader) // train.gradient_accumulation_iters(devices)
     lr_max_steps = min((train.epochs or 1) * steps_per_epoch, (train.max_steps or float("inf")))
