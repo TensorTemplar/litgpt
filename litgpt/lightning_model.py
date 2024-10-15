@@ -1,5 +1,4 @@
 import math
-from typing import Any
 from typing import Dict
 from typing import Optional
 from typing import Tuple
@@ -49,31 +48,6 @@ class LightningGPT(LightningModule):
         self.transformer["ln_f"] = self.config.norm_class(self.config.n_embd, eps=self.config.norm_eps)
         self.max_seq_length = self.config.block_size
         self.mask_cache: Optional[torch.Tensor] = None
-
-    def configure_optimizers(self) -> Dict[str, Any]:  # type: ignore
-        """
-        Return type is incorrectly hinted upstream. We return
-        **Dictionary**, with an ``"optimizer"`` key, and (optionally) a ``"lr_scheduler"``
-              key whose value is a single LR scheduler or ``lr_scheduler_config``.
-        """
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.training_args.learning_rate)
-        scheduler1 = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, lambda step: min(1.0, step / self.training_args.lr_warmup_steps)
-        )
-        scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=(self.training_args.max_steps - self.training_args.lr_warmup_steps)
-        )
-        scheduler = torch.optim.lr_scheduler.SequentialLR(
-            optimizer, schedulers=[scheduler1, scheduler2], milestones=[self.training_args.lr_warmup_steps]
-        )
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "step",  # or "epoch" depending on your scheduler
-                "monitor": "val_loss",  # Optional, if you use ReduceLROnPlateau or similar
-            },
-        }
 
     def forward(
         self,

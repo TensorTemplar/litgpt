@@ -23,8 +23,8 @@ from litgpt.args import EvalArgs
 from litgpt.args import TrainArgs
 from litgpt.data import DataModule
 from litgpt.generate.base import generate
-from litgpt.lightning_model import LightningGPT
 from litgpt.lightning_model import Block
+from litgpt.lightning_model import LightningGPT
 from litgpt.model import Config
 from litgpt.prompts import save_prompt_style
 from litgpt.tokenizer import Tokenizer
@@ -36,6 +36,7 @@ from litgpt.utils import chunked_cross_entropy
 from litgpt.utils import copy_config_files
 from litgpt.utils import CycleIterator
 from litgpt.utils import init_out_dir
+from litgpt.utils import instantiate_torch_optimizer
 from litgpt.utils import parse_devices
 from litgpt.utils import save_hyperparameters
 
@@ -136,14 +137,14 @@ def main(
     validate_args(train, eval)
 
     fabric.seed_everything(seed)  # same seed for every process to init model (FSDP)
-    
+
     tokenizer = Tokenizer(checkpoint_dir)
     train_dataloader, val_dataloader = get_dataloaders(fabric=fabric, data=data, tokenizer=tokenizer, train=train)
     longest_seq_length, longest_seq_ix = get_longest_seq_length(
         ConcatDataset([train_dataloader.dataset, val_dataloader.dataset])
     )
     fabric.print(
-        f"The longest sequence length in the train and validation data is {longest_seq_length} at index {longest_seq_ix}"
+        f"{get_utc_timestamp()} The longest sequence length in the train and validation data is {longest_seq_length} at index {longest_seq_ix}"
     )
 
     if fabric.global_rank == 0:
@@ -153,23 +154,26 @@ def main(
     # try init_empty_weights after all?
     with fabric.init_module(empty_init=True):
         model = LightningGPT(config=config, training_args=train)
-    
+
     # Staggered model configuration across ranks
     # very slow without re-sharing the weights, but avoids loading more than one model size into RAM at a time
     # TODO: at least parallelize within each node
     for rank in range(fabric.world_size):
         if fabric.global_rank == rank:
-            print(f"{get_utc_timestamp()} Configuring model on local rank {fabric.local_rank}. Ranks: {rank}/{fabric.world_size}")
+            print(
+                f"{get_utc_timestamp()} Configuring model on local rank {fabric.local_rank}. Ranks: {rank}/{fabric.world_size}"
+            )
             model.configure_model()
-            print(f"{get_utc_timestamp()} Setting up model on local rank {fabric.local_rank}. Ranks: {rank}/{fabric.world_size}")
+            print(
+                f"{get_utc_timestamp()} Setting up model on local rank {fabric.local_rank}. Ranks: {rank}/{fabric.world_size}"
+            )
             model = fabric.setup_module(model, _reapply_compile=True)
         fabric.barrier()
-    
-    # Redundant, consider just moving configure_optimizers internals into this script
-    # if support with fabric cannot be configured
-    training_config = model.configure_optimizers()
-    optimizer = fabric.setup_optimizers(training_config.get("optimizer"))
-    scheduler = training_config.get("lr_scheduler").get("scheduler")
+
+    steps_per_epoch = len(train_dataloader) // train.gradient_accumulation_iters(devices)
+    lr_max_steps = min((train.epochs or 1) * steps_per_epoch, (train.max_steps or float("inf")))
+    optimizer = fabric.setup_optimizers(instantiate_torch_optimizer(optimizer, model.parameters()))
+    scheduler = get_lr_scheduler(optimizer, warmup_steps=train.lr_warmup_steps, max_steps=lr_max_steps)
 
     if fabric.global_rank == 0:
         fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
@@ -204,13 +208,16 @@ def main(
             val_dataloader=val_dataloader,
             eval=dataclasses.replace(eval, max_iters=len(val_dataloader)),
         )
-        fabric.print(f"{get_utc_timestamp()} Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
+        fabric.print(
+            f"{get_utc_timestamp()} Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}"
+        )
 
     # Save the final checkpoint at the end of training
     save_path = out_dir / "final" / "lit_model.pth"
     if fabric.global_rank == 0:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         # Copy checkpoint files from original checkpoint dir
+        fabric.print(f"{get_utc_timestamp()} Saving additional files to {save_path}")
         copy_config_files(checkpoint_dir, save_path.parent)
         save_hyperparameters(setup, save_path.parent)
         save_prompt_style(data.prompt_style, save_path.parent)
@@ -241,7 +248,7 @@ def fit(
         f"The longest sequence length in the train and validation data is {longest_seq_length}, config requested a max of {train.max_seq_length}, setting"
         f" {model.max_seq_length}. Max model context length is {model.config.block_size}"
     )
-    
+
     if eval.initial_validation:
         val_loss = validate(fabric, model, val_dataloader, dataclasses.replace(eval, max_iters=len(val_dataloader)))
         val_loss = f"{val_loss:.3f}"
@@ -337,7 +344,7 @@ def fit(
         if train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0:
             checkpoint_file = out_dir / f"step-{state['step_count']:06d}" / "lit_model.pth"
             checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
-            fabric.print(f"Saving checkpoint to {str(checkpoint_file.parent)!r}")
+            fabric.print(f"{get_utc_timestamp()} Saving checkpoint to {str(checkpoint_file.parent)!r}")
             fabric.save(checkpoint_file, state)
             if fabric.global_rank == 0:
                 copy_config_files(checkpoint_dir, checkpoint_file.parent)
@@ -399,8 +406,12 @@ def generate_example(fabric: L.Fabric, model: LightningGPT, tokenizer: Tokenizer
         )
 
 
-def get_lr_scheduler(optimizer, warmup_steps: int, max_steps: int):
-    # linear warmup followed by cosine annealing
+def get_lr_scheduler(
+    optimizer: torch.optim.Optimizer, warmup_steps: int, max_steps: int
+) -> torch.optim.lr_scheduler.SequentialLR:
+    """
+    linear warmup followed by cosine annealing
+    """
     scheduler1 = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step / warmup_steps)
     scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=(max_steps - warmup_steps))
     return torch.optim.lr_scheduler.SequentialLR(optimizer, [scheduler1, scheduler2], milestones=[warmup_steps])
