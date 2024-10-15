@@ -160,13 +160,11 @@ def main(
         node_rank = fabric.node_rank
         # Calculate ranks that are on the current node
         ranks_on_node = list(range(node_rank * num_devices, (node_rank + 1) * num_devices))
-        node_group = torch.distributed.new_group(ranks=ranks_on_node)
-        return node_group
-
-    node_group = create_node_process_group()
+        return ranks_on_node
 
     # Staggered model configuration within each node sequentially, parallel across nodes
     # very slow without caching the weights on the node, but avoids loading more than one model size into RAM at a time
+    group = torch.distributed.new_group(ranks=create_node_process_group(), use_local_synchronization=True)
     for local_rank in range(devices):
         if fabric.local_rank == local_rank:
             print(
@@ -178,7 +176,7 @@ def main(
             )
             model = fabric.setup_module(model, _reapply_compile=True)
         # Synchronize within the node
-        torch.distributed.barrier(group=node_group)
+        torch.distributed.barrier(group=group, async_op=False)
 
     fabric.barrier()
     steps_per_epoch = len(train_dataloader) // train.gradient_accumulation_iters(devices)
