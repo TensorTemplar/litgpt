@@ -155,10 +155,6 @@ def main(
     with fabric.init_module(empty_init=True):
         model = LightningGPT(config=config, training_args=train)
 
-    # Staggered model configuration across ranks
-    # very slow without re-sharing the weights, but avoids loading more than one model size into RAM at a time
-    # TODO: at least parallelize within each node
-    # Function to create a process group for the current node
     def create_node_process_group():
         num_devices = devices 
         node_rank = fabric.node_rank
@@ -170,6 +166,7 @@ def main(
     node_group = create_node_process_group()
 
     # Staggered model configuration within each node sequentially, parallel across nodes
+    # very slow without caching the weights on the node, but avoids loading more than one model size into RAM at a time
     for local_rank in range(devices):
         if fabric.local_rank == local_rank:
             print(
