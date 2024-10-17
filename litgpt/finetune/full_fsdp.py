@@ -370,9 +370,7 @@ def fit(
 
 # FSDP has issues with `inference_mode`
 @torch.no_grad()
-def validate(
-    fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, eval: EvalArgs
-) -> torch.Tensor:
+def validate(fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, eval: EvalArgs) -> torch.Tensor:
     fabric.print(f"{get_utc_timestamp()} Validating ...")
     model.eval()
 
