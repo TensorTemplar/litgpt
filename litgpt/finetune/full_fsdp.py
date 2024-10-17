@@ -371,10 +371,9 @@ def fit(
 # FSDP has issues with `inference_mode`
 @torch.no_grad()
 def validate(
-    fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, eval: EvalArgs, verbose: bool = True
+    fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, eval: EvalArgs
 ) -> torch.Tensor:
-    if verbose:
-        fabric.print(f"{get_utc_timestamp()} Validating ...")
+    fabric.print(f"{get_utc_timestamp()} Validating ...")
     model.eval()
 
     if fabric.global_rank == 0:
@@ -384,8 +383,9 @@ def validate(
             f"{get_utc_timestamp()} Model Device: {device}, Torch default device set to {torch.get_default_device()}\n dtype: {dtype}, default dtype: {torch.get_default_dtype()}"
         )
 
-    fabric.print(f"{get_utc_timestamp()} Creating val loss tensor")
-    losses = torch.zeros(min(len(val_dataloader), eval.max_iters))
+    tsize = min(len(val_dataloader), eval.max_iters)
+    fabric.print(f"{get_utc_timestamp()} Creating val loss tensor of size {tsize}")
+    losses = torch.zeros(tsize, device=fabric.device, dtype=torch.float32)  # higher precision for loss
     fabric.print(f"{get_utc_timestamp()} Starting validation loop")
     for k, batch in enumerate(val_dataloader):
         if k >= eval.max_iters:
