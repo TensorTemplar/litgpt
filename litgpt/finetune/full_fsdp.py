@@ -274,8 +274,7 @@ def fit(
             fabric=fabric,
             model=model,
             val_dataloader=val_dataloader,
-            eval=dataclasses.replace(eval, max_iters=2),
-            verbose=False,
+            eval=dataclasses.replace(eval, max_iters=2)
         )  # sanity check
         val_loss = "n/a"
 
