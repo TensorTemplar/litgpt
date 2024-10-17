@@ -13,6 +13,7 @@ from typing import Tuple
 from typing import Union
 
 import lightning as L
+import psutil
 import torch
 from lightning.fabric.strategies.fsdp import FSDPStrategy
 from torch.utils.data import ConcatDataset
@@ -271,10 +272,7 @@ def fit(
     else:
         fabric.print("Verifying settings ...")
         validate(
-            fabric=fabric,
-            model=model,
-            val_dataloader=val_dataloader,
-            eval=dataclasses.replace(eval, max_iters=2)
+            fabric=fabric, model=model, val_dataloader=val_dataloader, eval=dataclasses.replace(eval, max_iters=2)
         )  # sanity check
         val_loss = "n/a"
 
@@ -383,15 +381,22 @@ def validate(fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, 
     tsize = min(len(val_dataloader), eval.max_iters)
     fabric.print(f"{get_utc_timestamp()} Creating val loss tensor of size {tsize}")
     losses = torch.zeros(tsize, device=fabric.device, dtype=torch.float32)  # higher precision for loss
+    
+    print_memory_usage(fabric)
     fabric.print(f"{get_utc_timestamp()} Starting validation loop")
     for k, batch in enumerate(val_dataloader):
         if k >= eval.max_iters:
             break
         input_ids, targets = batch["input_ids"], batch["labels"]
+
+        print_memory_usage(fabric)
         logits = model(input_ids)
         losses[k] = chunked_cross_entropy(logits[..., :-1, :], targets[..., 1:], chunk_size=0)
 
     val_loss = losses.mean()
+    fabric.print(f"{get_utc_timestamp()} Validation loop complete")
+    print_memory_usage(fabric)
+
     model.train()
     return val_loss
 
@@ -477,3 +482,23 @@ def validate_args(train: TrainArgs, eval: EvalArgs) -> None:
         issues.append(f"{__file__} requires either epochs or max_steps to be set. This is set in {train}")
     if issues:
         raise ValueError("\n".join(issues))
+
+
+def print_memory_usage(fabric):
+    # GPU Memory
+    if torch.cuda.is_available():
+        gpu_memory_allocated = torch.cuda.memory_allocated() / 1e9
+        gpu_memory_reserved = torch.cuda.memory_reserved() / 1e9
+        fabric.print(f"GPU Memory: {gpu_memory_allocated:.2f} GB allocated, {gpu_memory_reserved:.2f} GB reserved")
+    else:
+        fabric.print("GPU not available")
+
+    # System RAM
+    system_memory = psutil.virtual_memory()
+    total_ram = system_memory.total / 1e9
+    used_ram = system_memory.used / 1e9
+    available_ram = system_memory.available / 1e9
+    ram_percent = system_memory.percent
+
+    fabric.print(f"System RAM: {used_ram:.2f} GB used, {available_ram:.2f} GB available, {ram_percent:.1f}% used")
+    fabric.print(f"Total System RAM: {total_ram:.2f} GB")
