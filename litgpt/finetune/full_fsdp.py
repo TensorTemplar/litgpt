@@ -381,7 +381,7 @@ def validate(
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         fabric.print(
-            f"{get_utc_timestamp()} Model Device: {device}, dtype: {dtype}. Torch default device set to {torch.get_default_device()} "
+            f"{get_utc_timestamp()} Model Device: {device}, Torch default device set to {torch.get_default_device()}\n dtype: {dtype}, default dtype: {torch.get_default_dtype()}"
         )
 
     fabric.print(f"{get_utc_timestamp()} Creating val loss tensor")
