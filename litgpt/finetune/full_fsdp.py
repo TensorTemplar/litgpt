@@ -113,10 +113,11 @@ def setup(
     )
 
     fabric = L.Fabric(devices=devices, num_nodes=num_nodes, strategy=strategy, precision=precision, loggers=logger)
-    fabric.print(f"{get_utc_timestamp()} Config: {config}")
+    if fabric.global_rank == 0:
+        fabric.print(f"{get_utc_timestamp()} Config: {config}")
 
-    if torch.cuda.is_available():
-        check_nvlink_connectivity(fabric)
+        if torch.cuda.is_available():
+            check_nvlink_connectivity(fabric)
 
     fabric.launch(main, devices, resume, seed, config, data, checkpoint_dir, out_dir, train, eval, optimizer)
 
@@ -136,13 +137,25 @@ def main(
 ) -> None:
     validate_args(train, eval)
 
-    fabric.seed_everything(seed)  # same seed for every process to init model (FSDP)
+    fabric.seed_everything(seed)
 
     tokenizer = Tokenizer(checkpoint_dir)
     train_dataloader, val_dataloader = get_dataloaders(fabric=fabric, data=data, tokenizer=tokenizer, train=train)
-    longest_seq_length, longest_seq_ix = get_longest_seq_length(
-        ConcatDataset([train_dataloader.dataset, val_dataloader.dataset])
-    )
+
+    # Broadcast the values from rank 0 to all other ranks to not calculate this on each rank
+    if fabric.global_rank == 0:
+        longest_seq_length, longest_seq_ix = get_longest_seq_length(
+            ConcatDataset([train_dataloader.dataset, val_dataloader.dataset])
+        )
+        fabric.print(
+            f"{get_utc_timestamp()} The longest sequence length in the train and validation data is {longest_seq_length} at index {longest_seq_ix}"
+        )
+    else:
+        longest_seq_length = None
+        longest_seq_ix = None
+
+    longest_seq_length = fabric.broadcast(longest_seq_length, src=0)
+    longest_seq_ix = fabric.broadcast(longest_seq_ix, src=0)
     fabric.print(
         f"{get_utc_timestamp()} The longest sequence length in the train and validation data is {longest_seq_length} at index {longest_seq_ix}"
     )
@@ -170,7 +183,7 @@ def main(
         # Synchronize within the node
         fabric.barrier()
 
-    fabric.barrier()
+    fabric.barrier()  # wait for all ranks to finish setup before initializing optimizer from model parameters
     steps_per_epoch = len(train_dataloader) // train.gradient_accumulation_iters(devices)
     lr_max_steps = min((train.epochs or 1) * steps_per_epoch, (train.max_steps or float("inf")))
     optimizer = fabric.setup_optimizers(instantiate_torch_optimizer(optimizer, model.parameters()))
@@ -179,7 +192,7 @@ def main(
     if fabric.global_rank == 0:
         fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
     with fabric.strategy.module_sharded_context():
-        fabric.barrier()
+        fabric.barrier()  # wait for all optimizers to be ready, since we are loading a non-fabric checkpoint
         fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
 
     train_time = time.perf_counter()
@@ -236,7 +249,7 @@ def fit(
     train: TrainArgs,
     eval: EvalArgs,
     data: DataModule,
-    longest_seq_length: int,
+    longest_seq_length: Optional[float] = 1.0,
 ) -> None:
     # TODO: pass these directly as kwargs or create a state object instead
     model = state["model"]
@@ -251,7 +264,9 @@ def fit(
     )
 
     if eval.initial_validation:
-        val_loss = validate(fabric, model, val_dataloader, dataclasses.replace(eval, max_iters=len(val_dataloader)))
+        val_loss = validate(
+            fabric, model, val_dataloader, dataclasses.replace(eval, max_iters=len(val_dataloader))
+        )  # will this double the val dataset CPU memory usage?
         val_loss = f"{val_loss:.3f}"
     else:
         fabric.print("Verifying settings ...")
@@ -359,9 +374,19 @@ def validate(
     fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, eval: EvalArgs, verbose: bool = True
 ) -> torch.Tensor:
     if verbose:
-        fabric.print("Validating ...")
+        fabric.print(f"{get_utc_timestamp()} Validating ...")
     model.eval()
+
+    if fabric.global_rank == 0:
+        device = next(model.parameters()).device
+        dtype = next(model.parameters()).dtype
+        fabric.print(
+            f"{get_utc_timestamp()} Model Device: {device}, dtype: {dtype}. Torch default device set to {torch.get_default_device()} "
+        )
+
+    fabric.print(f"{get_utc_timestamp()} Creating val loss tensor")
     losses = torch.zeros(min(len(val_dataloader), eval.max_iters))
+    fabric.print(f"{get_utc_timestamp()} Starting validation loop")
     for k, batch in enumerate(val_dataloader):
         if k >= eval.max_iters:
             break
