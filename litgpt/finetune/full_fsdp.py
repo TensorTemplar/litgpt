@@ -54,7 +54,7 @@ def setup(
     devices: Union[int, str] = 2,
     num_nodes: int = 1,
     resume: Union[bool, Literal["auto"], Path] = False,
-    data: Optional[DataSet] = None,
+    data: Optional[DataModule] = None,
     train: TrainArgs = TrainArgs(
         save_interval=1000,
         log_interval=2,
