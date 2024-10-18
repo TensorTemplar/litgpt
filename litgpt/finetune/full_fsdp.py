@@ -109,6 +109,7 @@ def setup(
         auto_wrap_policy={Block},
         activation_checkpointing_policy={Block},
         state_dict_type="full",
+        sharding_strategy="FULL_SHARD",
         limit_all_gathers=True,
         cpu_offload=cpu_offload,
     )
@@ -365,8 +366,6 @@ def fit(
                 save_prompt_style(data.prompt_style, checkpoint_file.parent)
 
 
-# FSDP has issues with `inference_mode`
-@torch.no_grad()
 def validate(fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, eval: EvalArgs) -> torch.Tensor:
     fabric.print(f"{get_utc_timestamp()} Validating ...")
     model.eval()
@@ -377,25 +376,25 @@ def validate(fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, 
         fabric.print(
             f"{get_utc_timestamp()} Model Device: {device}, Torch default device set to {torch.get_default_device()}\n dtype: {dtype}, default dtype: {torch.get_default_dtype()}"
         )
-
-    tsize = min(len(val_dataloader), eval.max_iters)
-    fabric.print(f"{get_utc_timestamp()} Creating val loss tensor of size {tsize}")
-    losses = torch.zeros(tsize, device=fabric.device, dtype=torch.float32)  # higher precision for loss
-    
-    print_memory_usage(fabric)
-    fabric.print(f"{get_utc_timestamp()} Starting validation loop")
-    for k, batch in enumerate(val_dataloader):
-        if k >= eval.max_iters:
-            break
-        input_ids, targets = batch["input_ids"], batch["labels"]
+    with torch.no_grad():
+        tsize = min(len(val_dataloader), eval.max_iters)
+        fabric.print(f"{get_utc_timestamp()} Creating val loss tensor of size {tsize}")
+        losses = torch.zeros(tsize, device=fabric.device, dtype=torch.float32)  # higher precision for loss
 
         print_memory_usage(fabric)
-        logits = model(input_ids)
-        losses[k] = chunked_cross_entropy(logits[..., :-1, :], targets[..., 1:], chunk_size=0)
+        fabric.print(f"{get_utc_timestamp()} Starting validation loop")
+        for k, batch in enumerate(val_dataloader):
+            if k >= eval.max_iters:
+                break
+            input_ids, targets = batch["input_ids"], batch["labels"]
 
-    val_loss = losses.mean()
-    fabric.print(f"{get_utc_timestamp()} Validation loop complete")
-    print_memory_usage(fabric)
+            print_memory_usage(fabric)
+            logits = model(input_ids)
+            losses[k] = chunked_cross_entropy(logits[..., :-1, :], targets[..., 1:], chunk_size=0)
+
+        val_loss = losses.mean()
+        fabric.print(f"{get_utc_timestamp()} Validation loop complete")
+        print_memory_usage(fabric)
 
     model.train()
     return val_loss
