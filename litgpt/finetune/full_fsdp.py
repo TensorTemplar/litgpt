@@ -169,7 +169,8 @@ def main(
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     # try init_empty_weights after all?
     
-    model = LightningGPT(config=config, training_args=train)
+    with fabric.init_module(empty_init=False):  # init happens explicitly in configure_model
+        model = LightningGPT(config=config, training_args=train)
 
     # Staggered model configuration within each node sequentially, parallel across nodes
     # very slow without caching the weights on the node, but avoids loading more than one model size into RAM at a time
