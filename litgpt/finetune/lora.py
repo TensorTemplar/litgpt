@@ -212,13 +212,16 @@ def main(
                 f"{get_utc_timestamp()} Setting up model on node {fabric.local_rank}, world rank {fabric.global_rank}."
             )
             model = fabric.setup_module(model, _reapply_compile=True)
-            # strict=False because missing keys due to LoRA weights not contained in state dict
-            fabric.load_raw(path=checkpoint_path, obj=model, strict=False)
         # Synchronize within the node
         fabric.barrier()
 
     fabric.barrier()
+    with fabric.strategy.module_sharded_context():
+        # strict=False because missing keys due to LoRA weights not contained in state dict
+        fabric.load_raw(path=checkpoint_path, obj=model, strict=False)
+
     fabric.print(f"Model loaded \n {model}\n freezing for LORA")
+    fabric.barrier()
     mark_only_lora_as_trainable(model)
     fabric.print(f"Model frozen for LORA, {model}")
 
