@@ -206,12 +206,14 @@ def main(
             print(
                 f"{get_utc_timestamp()} Configuring model on node {fabric.local_rank}, world rank {fabric.global_rank}."
             )
-            with fabric.init_module(empty_init=(fabric.world_size > 1)):
+            with fabric.init_module(empty_init=False):
                 model = GPT(config)
             print(
                 f"{get_utc_timestamp()} Setting up model on node {fabric.local_rank}, world rank {fabric.global_rank}."
             )
             model = fabric.setup_module(model, _reapply_compile=True)
+            # strict=False because missing keys due to LoRA weights not contained in state dict
+            fabric.load_raw(path=checkpoint_path, obj=model, strict=False)
         # Synchronize within the node
         fabric.barrier()
 
@@ -236,8 +238,7 @@ def main(
     optimizer = fabric.setup_optimizers(optimizer)
     scheduler = get_lr_scheduler(optimizer, warmup_steps=train.lr_warmup_steps, max_steps=lr_max_steps)
 
-    # strict=False because missing keys due to LoRA weights not contained in state dict
-    load_checkpoint(fabric, model, checkpoint_path, strict=False)
+    
 
     train_time = time.perf_counter()
     fit(
