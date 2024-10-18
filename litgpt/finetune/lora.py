@@ -218,7 +218,9 @@ def main(
         fabric.barrier()
 
     fabric.barrier()
+    fabric.print(f"Model loaded \n {model}\n freezing for LORA")
     mark_only_lora_as_trainable(model)
+    fabric.print(f"Model frozen for LORA, {model}")
 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
     fabric.print(f"Number of non-trainable parameters: {num_parameters(model, requires_grad=False):,}")
