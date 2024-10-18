@@ -23,6 +23,7 @@ from torchmetrics import RunningMean
 from litgpt.args import EvalArgs
 from litgpt.args import TrainArgs
 from litgpt.data import DataModule
+from litgpt.data.base import SFTDataset
 from litgpt.generate.base import generate
 from litgpt.lightning_model import Block
 from litgpt.lightning_model import LightningGPT
@@ -53,7 +54,7 @@ def setup(
     devices: Union[int, str] = 2,
     num_nodes: int = 1,
     resume: Union[bool, Literal["auto"], Path] = False,
-    data: Optional[DataModule] = None,
+    data: Optional[DataSet] = None,
     train: TrainArgs = TrainArgs(
         save_interval=1000,
         log_interval=2,
@@ -130,7 +131,7 @@ def main(
     resume: Union[bool, Literal["auto"], Path],
     seed: int,
     config: Config,
-    data: DataModule,
+    data: DataModule,  # Incorrect, we expect a Mix of DataModule and DataSet
     checkpoint_dir: Path,
     out_dir: Path,
     train: TrainArgs,
@@ -167,8 +168,8 @@ def main(
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     # try init_empty_weights after all?
-    with fabric.init_module(empty_init=True):
-        model = LightningGPT(config=config, training_args=train)
+    
+    model = LightningGPT(config=config, training_args=train)
 
     # Staggered model configuration within each node sequentially, parallel across nodes
     # very slow without caching the weights on the node, but avoids loading more than one model size into RAM at a time
@@ -190,6 +191,8 @@ def main(
     lr_max_steps = min((train.epochs or 1) * steps_per_epoch, (train.max_steps or float("inf")))
     optimizer = fabric.setup_optimizers(instantiate_torch_optimizer(optimizer, model.parameters()))
     scheduler = get_lr_scheduler(optimizer, warmup_steps=train.lr_warmup_steps, max_steps=lr_max_steps)
+    fabric.print(f"{get_utc_timestamp()} Optimizer and scheduler initialized")
+    print_memory_usage(fabric)
 
     if fabric.global_rank == 0:
         fabric.print(f"{get_utc_timestamp()} Loading checkpoint from {checkpoint_path}")
@@ -197,6 +200,8 @@ def main(
         fabric.barrier()  # wait for all optimizers to be ready, since we are loading a non-fabric checkpoint
         fabric.load_raw(path=checkpoint_path, obj=model, strict=True)
 
+    fabric.print(f"{get_utc_timestamp()} Starting training")
+    print_memory_usage(fabric)
     train_time = time.perf_counter()
     fit(
         fabric=fabric,
@@ -250,7 +255,7 @@ def fit(
     out_dir: Path,
     train: TrainArgs,
     eval: EvalArgs,
-    data: DataModule,
+    data: DataModule,  # Incorrect, we expect a Mix of DataModule and DataSet
     longest_seq_length: Optional[float] = 1.0,
 ) -> None:
     # TODO: pass these directly as kwargs or create a state object instead
@@ -355,9 +360,11 @@ def fit(
             metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
             fabric.log_dict(metrics, step=state["iter_num"])
             fabric.barrier()
+
         if train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0:
             checkpoint_file = out_dir / f"step-{state['step_count']:06d}" / "lit_model.pth"
-            checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+            if fabric.global_rank == 0:
+                checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
             fabric.print(f"{get_utc_timestamp()} Saving checkpoint to {str(checkpoint_file.parent)!r}")
             fabric.save(checkpoint_file, state)
             if fabric.global_rank == 0:
@@ -378,8 +385,10 @@ def validate(fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, 
         )
     with torch.no_grad():
         tsize = min(len(val_dataloader), eval.max_iters)
-        fabric.print(f"{get_utc_timestamp()} Creating val loss tensor of size {tsize}")
-        losses = torch.zeros(tsize, device=fabric.device, dtype=torch.float32)  # higher precision for loss
+        fabric.print(f"{get_utc_timestamp()} Creating val loss tensor")
+        print_memory_usage(fabric)
+        with fabric.init_tensor():
+            losses = torch.zeros(tsize)
 
         print_memory_usage(fabric)
         fabric.print(f"{get_utc_timestamp()} Starting validation loop")
@@ -400,37 +409,37 @@ def validate(fabric: L.Fabric, model: LightningGPT, val_dataloader: DataLoader, 
     return val_loss
 
 
-@torch.no_grad()
-def generate_example(fabric: L.Fabric, model: LightningGPT, tokenizer: Tokenizer, eval: EvalArgs, data: DataModule):
+def generate_example(fabric: L.Fabric, model: LightningGPT, tokenizer: Tokenizer, eval: EvalArgs, data: SFTDataset):
     instruction = "Recommend a movie for me to watch during the weekend and explain the reason."
     fabric.print(instruction)
     prompt = data.prompt_style.apply(instruction)
     encoded = tokenizer.encode(prompt, device=fabric.device)
     model.eval()
 
-    with fabric.init_tensor():
-        # do not set `max_seq_length=max_returned_token` because memory is not a concern here
-        model.set_kv_cache(batch_size=1)
-
-    max_returned_tokens = len(encoded) + eval.max_new_tokens
-
-    if max_returned_tokens < model.max_seq_length:
+    with torch.no_grad():
         with fabric.init_tensor():
             # do not set `max_seq_length=max_returned_token` because memory is not a concern here
             model.set_kv_cache(batch_size=1)
-        output = generate(
-            model, encoded, max_returned_tokens=max_returned_tokens, temperature=0.8, eos_id=tokenizer.eos_id
-        )
-        model.clear_kv_cache()
-        model.train()
-        output = tokenizer.decode(output)
-        fabric.print(f"{output}\n")
-    else:
-        print(
-            f"Length of encoded instruction ({len(encoded)}) and eval.max_new_tokens ({eval.max_new_tokens}) "
-            f"exceeds model.max_seq_length ({model.max_seq_length}) used for training. Skipping example generation for efficiency. "
-            f"The model's supported context size (post-training) is {model.config.block_size}."
-        )
+
+        max_returned_tokens = len(encoded) + eval.max_new_tokens
+
+        if max_returned_tokens < model.max_seq_length:
+            with fabric.init_tensor():
+                # do not set `max_seq_length=max_returned_token` because memory is not a concern here
+                model.set_kv_cache(batch_size=1)
+            output = generate(
+                model, encoded, max_returned_tokens=max_returned_tokens, temperature=0.8, eos_id=tokenizer.eos_id
+            )
+            model.clear_kv_cache()
+            model.train()
+            output = tokenizer.decode(output)
+            fabric.print(f"{output}\n")
+        else:
+            print(
+                f"Length of encoded instruction ({len(encoded)}) and eval.max_new_tokens ({eval.max_new_tokens}) "
+                f"exceeds model.max_seq_length ({model.max_seq_length}) used for training. Skipping example generation for efficiency. "
+                f"The model's supported context size (post-training) is {model.config.block_size}."
+            )
 
 
 def get_lr_scheduler(
@@ -483,8 +492,7 @@ def validate_args(train: TrainArgs, eval: EvalArgs) -> None:
         raise ValueError("\n".join(issues))
 
 
-def print_memory_usage(fabric):
-    # GPU Memory
+def print_memory_usage(fabric: L.Fabric) -> None:
     if torch.cuda.is_available():
         gpu_memory_allocated = torch.cuda.memory_allocated() / 1e9
         gpu_memory_reserved = torch.cuda.memory_reserved() / 1e9
@@ -492,7 +500,6 @@ def print_memory_usage(fabric):
     else:
         fabric.print("GPU not available")
 
-    # System RAM
     system_memory = psutil.virtual_memory()
     total_ram = system_memory.total / 1e9
     used_ram = system_memory.used / 1e9
