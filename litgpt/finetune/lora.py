@@ -1,5 +1,6 @@
 # Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file.
 import dataclasses
+import datetime
 import math
 import os
 import time
@@ -9,6 +10,7 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 import warnings
 
 import lightning as L
+import psutil
 import torch
 from lightning.fabric.plugins import BitsandbytesPrecision
 from lightning.fabric.strategies import FSDPStrategy
@@ -145,9 +147,10 @@ def setup(
                 " when using the --quantize flag."
             )
         strategy = FSDPStrategy(
-            auto_wrap_policy={Block},
-            activation_checkpointing_policy={Block},
+            auto_wrap_policy={torch.nn.Linear},
+            # activation_checkpointing_policy={Block},
             state_dict_type="full",
+            sharding_strategy="FULL_SHARD",
             limit_all_gathers=True,
             cpu_offload=False,
         )
@@ -194,14 +197,30 @@ def main(
         os.makedirs(out_dir, exist_ok=True)
 
     checkpoint_path = checkpoint_dir / "lit_model.pth"
-    with fabric.init_module(empty_init=(fabric.world_size > 1)):
-        model = GPT(config)
+
+    # Staggered model configuration within each node sequentially, parallel across nodes
+    # very slow without caching the weights on the node, but avoids loading more than one model size into RAM at a time
+    model = None
+    for local_rank in range(devices):
+        if fabric.local_rank == local_rank:
+            print(
+                f"{get_utc_timestamp()} Configuring model on node {fabric.local_rank}, world rank {fabric.global_rank}."
+            )
+            with fabric.init_module(empty_init=(fabric.world_size > 1)):
+                model = GPT(config)
+            print(
+                f"{get_utc_timestamp()} Setting up model on node {fabric.local_rank}, world rank {fabric.global_rank}."
+            )
+            model = fabric.setup_module(model, _reapply_compile=True)
+        # Synchronize within the node
+        fabric.barrier()
+
+    fabric.barrier()
     mark_only_lora_as_trainable(model)
 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
     fabric.print(f"Number of non-trainable parameters: {num_parameters(model, requires_grad=False):,}")
 
-    model = fabric.setup_module(model)
     if isinstance(fabric.strategy.precision, BitsandbytesPrecision):
         optimizer = instantiate_bnb_optimizer(optimizer, model.parameters())
 
@@ -468,3 +487,23 @@ def validate_args(train: TrainArgs, eval: EvalArgs) -> None:
         issues.append(f"{__file__} requires either epochs or max_steps to be set. This is set in {train}")
     if issues:
         raise ValueError("\n".join(issues))
+
+def get_utc_timestamp():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("[%Y-%m-%d %H:%M:%S UTC]")
+
+def print_memory_usage(fabric: L.Fabric) -> None:
+    if torch.cuda.is_available():
+        gpu_memory_allocated = torch.cuda.memory_allocated() / 1e9
+        gpu_memory_reserved = torch.cuda.memory_reserved() / 1e9
+        fabric.print(f"GPU Memory: {gpu_memory_allocated:.2f} GB allocated, {gpu_memory_reserved:.2f} GB reserved")
+    else:
+        fabric.print("GPU not available")
+
+    system_memory = psutil.virtual_memory()
+    total_ram = system_memory.total / 1e9
+    used_ram = system_memory.used / 1e9
+    available_ram = system_memory.available / 1e9
+    ram_percent = system_memory.percent
+
+    fabric.print(f"System RAM: {used_ram:.2f} GB used, {available_ram:.2f} GB available, {ram_percent:.1f}% used")
+    fabric.print(f"Total System RAM: {total_ram:.2f} GB")
